@@ -3705,7 +3705,7 @@ class VectorFitting:
 
     def write_spice_subcircuit_s(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool = False,
-                                     topology: str = 'impedance') -> None:
+                                     topology: str = 'impedance_v2') -> None:
         """
         Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
         in spice simulator netlist syntax (compatible with ngspice, Xyce, ...).
@@ -3757,15 +3757,21 @@ class VectorFitting:
             doi: https://doi.org/10.1002/jnm.2612
 
         """
-        if topology == 'impedance':
-            return self._write_spice_subcircuit_s_impedance(file, fitted_model_name, create_reference_pins)
-        elif topology == 'admittance':
-            return self._write_spice_subcircuit_s_admittance(file, fitted_model_name, create_reference_pins)
-        elif topology == 'admittance2':
-            return self._write_spice_subcircuit_s_admittance2(file, fitted_model_name, create_reference_pins)
+        if topology == 'impedance_v1':
+            return self._write_spice_subcircuit_s_impedance_v1(file, fitted_model_name, create_reference_pins)
+        elif topology == 'impedance_v2':
+            return self._write_spice_subcircuit_s_impedance_v2(file, fitted_model_name, create_reference_pins)
+        elif topology == 'admittance_v1':
+            return self._write_spice_subcircuit_s_admittance_v1(file, fitted_model_name, create_reference_pins)
+        elif topology == 'admittance_v2':
+            return self._write_spice_subcircuit_s_admittance_v2(file, fitted_model_name, create_reference_pins)
 
-    def _write_spice_subcircuit_s_impedance(self, file: str, fitted_model_name: str = "s_equivalent",
+    def _write_spice_subcircuit_s_impedance_v1(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool = False) -> None:
+        # This version has only two G sources to transfer the reflected wave b to the ports.
+        # I would have guessed that it would be faster than having a G source for every pole but it is
+        # indeed about 20 % slower in the linear solve. In transient it's the same speed.
+
         """
         Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
         in spice simulator netlist syntax (compatible with ngspice, Xyce, ...).
@@ -4014,8 +4020,12 @@ class VectorFitting:
             f.write('R1 1 2 {res}\n')
             f.write('.ENDS rc_passive\n')
 
-    def _write_spice_subcircuit_s_impedance2(self, file: str, fitted_model_name: str = "s_equivalent",
+    def _write_spice_subcircuit_s_impedance_v2(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool = False) -> None:
+        # This version uses one G element per pole to transfer the b reflected contributions to the port network.
+        # It has more components but it runs faster in the linear solve than the version 1 even if it has more
+        # components. In transient the speed is the same.
+
         """
         Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
         in spice simulator netlist syntax (compatible with ngspice, Xyce, ...).
@@ -4253,8 +4263,10 @@ class VectorFitting:
             f.write('R1 1 2 {res}\n')
             f.write('.ENDS rc_passive\n')
 
-    def _write_spice_subcircuit_s_admittance(self, file: str, fitted_model_name: str = "s_equivalent",
+    def _write_spice_subcircuit_s_admittance_v1(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool=False) -> None:
+        # This version uses only two controlled sources to transfer the b reflected wave to the port networks
+        # but it runs extremely slow in Xyce compared to the impedance based version.
         """
         Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
         in spice simulator netlist syntax
@@ -4456,14 +4468,12 @@ class VectorFitting:
             f.write('R1 1 n_neg {res}\n')
             f.write('.ENDS rl_admittance\n\n')
 
-    def _write_spice_subcircuit_s_admittance2(self, file: str, fitted_model_name: str = "s_equivalent",
+    def _write_spice_subcircuit_s_admittance_v2(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool=False) -> None:
-        # This version of the admittance topology synthesizer uses a current source
-        # in parrallel to the port impedance as the port network instead of a voltage source
-        # in series with the port impedance.
-        #
-        # In Xyce those subckts generated with admittance2 simulate twice as fast in the
-        # linear solve. In transient there is almost no difference.
+        # This version also uses only two controlled sources for the transfer of the b reflected wave to the
+        # port networks but it uses a parallel port network instead of a serial one. This uses only half the
+        # simulation time as the v1 version just by replacing n_ports * CCVS with n_ports * CCCS but it is
+        # still way slower than the impedance versions.
 
         """
         Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
