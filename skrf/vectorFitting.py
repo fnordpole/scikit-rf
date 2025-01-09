@@ -3857,17 +3857,8 @@ class VectorFitting:
                 # Initialize node counters for a_i (p) and -a_i (n)
                 n_current_pos = 0
                 n_current_neg = 0
-                node_pos = f'n_a{i + 1}_p_{n_current_pos}'
-                node_neg = f'n_a{i + 1}_n_{n_current_neg}'
-
-                # VCCS and CCS driving the transfer impedances with incident wave a = V/(2.0*sqrt(Z0)) + I*sqrt(Z0)/2
-                #
-                # These current sources in parallel realize the incident wave a. The types of the sources
-                # and their gains arise from the definition of the incident wave a at port i:
-                # a_i=v_i/(2*sqrt(z0_i)) + i_i*sqrt(z0_i)/2
-                # So we need a VCCS with a gain 1/(2*sqrt(z0_i)) in parallel with a CCCS with a gain sqrt(z0_i)/2
-                f.write(f'Ga{i + 1} {node_neg} {node_pos} p{i + 1} {node_ref_i} {1 / (2 * np.sqrt(z0_i))}\n')
-                f.write(f'Fa{i + 1} {node_neg} {node_pos} V{i + 1} {np.sqrt(z0_i) / 2}\n')
+                node_pos = '0'
+                node_neg = '0'
 
                 for j in range(self.network.nports):
                     # Stacking order in VectorFitting class variables:
@@ -3991,8 +3982,16 @@ class VectorFitting:
 
                 # Create impedance chain termination resistors. They are 1 ohm but the value is not important.
                 # Their only purpose is to connect the impedance chains to gnd without using a 0 v VDC source.
-                f.write(f'Rtp{i + 1} {node_pos} 0 {1}\n')
-                f.write(f'Rtn{i + 1} {node_neg} 0 {1}\n')
+                #f.write(f'Rtp{i + 1} {node_pos} 0 {1}\n')
+                #f.write(f'Rtn{i + 1} {node_neg} 0 {1}\n')
+                # VCCS and CCS driving the transfer impedances with incident wave a = V/(2.0*sqrt(Z0)) + I*sqrt(Z0)/2
+                #
+                # These current sources in parallel realize the incident wave a. The types of the sources
+                # and their gains arise from the definition of the incident wave a at port i:
+                # a_i=v_i/(2*sqrt(z0_i)) + i_i*sqrt(z0_i)/2
+                # So we need a VCCS with a gain 1/(2*sqrt(z0_i)) in parallel with a CCCS with a gain sqrt(z0_i)/2
+                f.write(f'Ga{i + 1} {node_neg} {node_pos} p{i + 1} {node_ref_i} {1 / (2 * np.sqrt(z0_i))}\n')
+                f.write(f'Fa{i + 1} {node_neg} {node_pos} V{i + 1} {np.sqrt(z0_i) / 2}\n')
 
             f.write(f'.ENDS {fitted_model_name}\n')
             f.write('*\n')
