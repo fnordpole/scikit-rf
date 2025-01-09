@@ -1109,7 +1109,7 @@ class VectorFitting:
             header += f'.LIN FORMAT=TOUCHSTONE2 LINTYPE=S DATAFORMAT=MA FILE={name}-xyce.s4p '
             header += 'WIDTH=15 PRECISION=12\n'
 
-            header += '.TRAN 1ps 10ns\n'
+            header += '*.TRAN 1ps 10ns\n'
 
             # Create subcircuit pins
             if create_reference_pins:
@@ -3759,8 +3759,10 @@ class VectorFitting:
         """
         if topology == 'impedance':
             return self._write_spice_subcircuit_s_impedance(file, fitted_model_name, create_reference_pins)
-        else:
+        elif topology == 'admittance':
             return self._write_spice_subcircuit_s_admittance(file, fitted_model_name, create_reference_pins)
+        elif topology == 'admittance2':
+            return self._write_spice_subcircuit_s_admittance2(file, fitted_model_name, create_reference_pins)
 
     def _write_spice_subcircuit_s_impedance(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool = False) -> None:
@@ -3834,12 +3836,6 @@ class VectorFitting:
 
             f.write(f'.SUBCKT {fitted_model_name} {str_input_nodes}\n')
 
-            # total node count in the series connections for transfer networks
-            n_residues_total=0
-            for residues in self.residues:
-                n_residues_total += np.size(residues, axis = 0) * np.size(residues, axis = 1)
-            n_nodes_total = len(np.nonzero([self.constant[0][0], self.proportional[0][0]])[0]) + n_residues_total
-
             for i in range(self.network.nports):
                 f.write('*\n')
                 f.write(f'* Port network for port {i + 1}\n')
@@ -3849,35 +3845,33 @@ class VectorFitting:
                 else:
                     node_ref_i = '0'
 
-                # reference impedance (real, i.e. resistance) of port i
+                # Reference impedance (real, i.e. resistance) of port i
                 z0_i = np.real(self.network.z0[0, i])
 
-                # transfer gain of the controlled current sources representing the incident power wave a_i at port i
-                #
-                # the gain values result from the definition of the incident power wave:
-                # a_i = 1 / 2 / sqrt(Z0_i) * (V_i + Z0_i * I_i) = 1 / 2 / sqrt(Z0_i) * V_i + sqrt(Z0_i) / 2 * I_i
-                gain_vccs_a_i = 1 / 2 / np.sqrt(z0_i)
-                gain_cccs_a_i = np.sqrt(z0_i) / 2
-
-                # dummy voltage source (v = 0) for port current sensing (I_i)
+                # Dummy voltage source (v = 0) for port current sensing (I_i)
                 f.write(f'V{i + 1} p{i + 1} s{i + 1} 0\n')
 
                 # Port reference impedance Z0_i
                 f.write(f'R{i + 1} s{i + 1} {node_ref_i} {z0_i}\n')
 
-                # prepare first node
-                n_current = 0
-                node_pos = f'n_{i + 1}_{n_current}'
+                # Initialize node counters for a_i (p) and -a_i (n)
+                n_current_pos = 0
+                n_current_neg = 0
+                node_pos = f'n_a{i + 1}_p_{n_current_pos}'
+                node_neg = f'n_a{i + 1}_n_{n_current_neg}'
 
-                # VCCS and CCCS adding their currents to represent the incident wave a_i
-                # I_a_i = U_i / 2 / sqrt(Z0_i) + sqrt(Z0_i) / 2 * I_i
-                f.write(f'Ga{i + 1} 0 {node_pos} p{i + 1} {node_ref_i} {gain_vccs_a_i}\n')
-                f.write(f'Fa{i + 1} 0 {node_pos} V{i + 1} {gain_cccs_a_i}\n')
+                # VCCS and CCS driving the transfer impedances with incident wave a = V/(2.0*sqrt(Z0)) + I*sqrt(Z0)/2
+                #
+                # These current sources in parallel realize the incident wave a. The types of the sources
+                # and their gains arise from the definition of the incident wave a at port i:
+                # a_i=v_i/(2*sqrt(z0_i)) + i_i*sqrt(z0_i)/2
+                # So we need a VCCS with a gain 1/(2*sqrt(z0_i)) in parallel with a CCCS with a gain sqrt(z0_i)/2
+                f.write(f'Ga{i + 1} {node_neg} {node_pos} p{i + 1} {node_ref_i} {1 / (2 * np.sqrt(z0_i))}\n')
+                f.write(f'Fa{i + 1} {node_neg} {node_pos} V{i + 1} {np.sqrt(z0_i) / 2}\n')
 
                 for j in range(self.network.nports):
                     # Stacking order in VectorFitting class variables:
                     # s11, s12, s13, ..., s21, s22, s23, ...
-                    # idx_S_i_j = i * self.network.nports + j
                     i_response = j * self.network.nports + i
 
                     # Get idx_pole_group and idx_pole_group_member for current response
@@ -3890,120 +3884,80 @@ class VectorFitting:
                     # Get poles
                     poles=self.poles[idx_pole_group]
 
-                    # transfer impedances connected in series to current sources representing a_i
-                    # the voltages across the individual impedances represents fragments of S_j_i
-                    # k is the index for the pole/residue pairs or the constant and proportional terms
-                    # I_a_i ~ a_i
-                    # Z_j_i_k ~ S_j_i_k
-                    # U_j_i_k ~ b_j_k
                     f.write('*\n')
                     f.write(f'* Transfer from port {i + 1} to port {j + 1}\n')
 
-                    # reference impedance (real, i.e. resistance) of port i
+                    # Reference impedance (real, i.e. resistance) of port j
                     z0_j = np.real(self.network.z0[0, j])
-
-                    # transfer gain of the controlled current source representing the reflected power wave b_i at port i
-                    #
-                    # the gain values result from the definition of the reflected power wave:
-                    # b_i = 1 / 2 / sqrt(Z0_i) * (V_i - Z0_i * I_i)
-                    #
-                    # depending on the circuit topology used for the equivalent port network, this can be implemented
-                    # with either controlled current and/or controlled voltage sources. in case of the Norton current
-                    # source used in this implementation, the reflected power wave relates to the source current as:
-                    # b_i = sqrt(Z0_i) / 2 * I_b_i <==> I_b_i = 2 / sqrt(Z0_i) * b_i
-                    gain_vccs_b_j = 2 / np.sqrt(z0_j)
 
                     if create_reference_pins:
                         node_ref_j = f'p{j + 1}_ref'
                     else:
                         node_ref_j = '0'
 
-
-
-                    # Start with proportional and constant term of the model
-                    # H(s) = d + s * e  model
-                    # Y(s) = G + s * C  equivalent admittance
+                    # Get proportional and constant term of the model
                     d = self.constant[idx_pole_group][idx_pole_group_member]
                     e = self.proportional[idx_pole_group][idx_pole_group_member]
 
-                    # prepare nodes for first impedance
-                    n_nodes_remaining = n_nodes_total - n_current
-                    if n_nodes_remaining == 1:
-                        node_neg = '0'
-                    else:
-                        node_neg = f'n_{i + 1}_{n_current + 1}'
+                    # Store begin nodes of series impedance chains
+                    node_pos_begin = node_pos
+                    node_neg_begin = node_neg
 
                     # R for constant term
                     if d != 0.0:
-                        # calculated resistence can be negative, but implementation must use positive values
-                        # R = |d|
-                        f.write(f'R{j + 1}_{i + 1} {node_pos} {node_neg} {np.abs(d)}\n')
-
-                        # correction of the sign inversion by flipping the polarity of the control voltage for the VCCS
-                        # transferring the voltage across L to port j
+                        # Calculated resistence can be negative, but implementation must use positive values.
+                        # Append to pos or neg impedance chain depending on sign
                         if d < 0:
-                            f.write(f'Gb{j + 1}_{i + 1}_{n_current} {node_ref_j} s{j + 1} {node_neg} {node_pos} '
-                                    f'{gain_vccs_b_j}\n')
-                        else:
-                            f.write(f'Gb{j + 1}_{i + 1}_{n_current} {node_ref_j} s{j + 1} {node_pos} {node_neg} '
-                                    f'{gain_vccs_b_j}\n')
+                            n_current_neg += 1
+                            node1 = node_neg
+                            node2 = node_neg = f'n_a{i + 1}_n_{n_current_neg}'
 
-                        # prepare nodes for next impedance
-                        n_current += 1
-                        node_pos = f'n_{i + 1}_{n_current}'
-                        n_nodes_remaining = n_nodes_total - n_current
-                        if n_nodes_remaining == 1:
-                            node_neg = '0'
                         else:
-                            node_neg = f'n_{i + 1}_{n_current + 1}'
+                            n_current_pos += 1
+                            node1 = node_pos
+                            node2 = node_pos = f'n_a{i + 1}_p_{n_current_pos}'
+
+                        f.write(f'R{j + 1}_{i + 1} {node1} {node2} {np.abs(d)}\n')
 
                     # L for proportional term
                     if e != 0.0:
-                        # calculated inductance can be negative, but implementation must use positive values
-                        # L = |e|
-                        f.write(f'L{j + 1}_{i + 1} {node_pos} {node_neg} {np.abs(e)}\n')
-
-                        # correction of the sign inversion by flipping the polarity of the control voltage for the VCCS
-                        # transferring the voltage across L to port j
-                        if e < 0:
-                            f.write(f'Gb{j + 1}_{i + 1}_{n_current} {node_ref_j} s{j + 1} {node_neg} {node_pos} '
-                                    f'{gain_vccs_b_j}\n')
+                        # Append to pos or neg impedance chain depending on sign
+                        if d < 0:
+                            n_current_neg += 1
+                            node1 = node_neg
+                            node2 = node_neg = f'n_a{i + 1}_n_{n_current_neg}'
                         else:
-                            f.write(f'Gb{j + 1}_{i + 1}_{n_current} {node_ref_j} s{j + 1} {node_pos} {node_neg} '
-                                    f'{gain_vccs_b_j}\n')
+                            n_current_pos += 1
+                            node1 = node_pos
+                            node2 = node_pos = f'n_a{i + 1}_p_{n_current_pos}'
 
-                        # prepare nodes for next impedance
-                        n_current += 1
-                        node_pos = f'n_{i + 1}_{n_current}'
-                        n_nodes_remaining = n_nodes_total - n_current
-                        if n_nodes_remaining == 1:
-                            node_neg = '0'
-                        else:
-                            node_neg = f'n_{i + 1}_{n_current + 1}'
+                        f.write(f'L{j + 1}_{i + 1} {node1} {node2} {np.abs(e)}\n')
 
                     # Transfer admittances represented by poles and residues
                     for idx_pole in range(len(poles)):
                         pole = poles[idx_pole]
                         residue = residues[idx_pole]
 
-                        # calculated component values can be negative, but implementation must use positive values.
-                        # the sign of the residue can be inverted, but then the inversion must be compensated by
-                        # flipping the polarity of the VCCS control voltage for transfer of U_j_i_k to port j.
+                        # Calculated component values can be negative, but implementation must use positive values.
+                        # The sign of the residue can be inverted, but then the inversion must be compensated by
+                        # flipping the polarity of the VCCS control voltage
                         if np.real(residue) < 0.0:
-                            # residue multiplication with -1 required
+                            # Residue multiplication with -1 required
                             residue = -1 * residue
-                            f.write(f'Gb{j + 1}_{i + 1}_{n_current} {node_ref_j} s{j + 1} {node_neg} {node_pos} '
-                                    f'{gain_vccs_b_j}\n')
+                            n_current_neg += 1
+                            node1 = node_neg
+                            node2 = node_neg = f'n_a{i + 1}_n_{n_current_neg}'
                         else:
-                            f.write(f'Gb{j + 1}_{i + 1}_{n_current} {node_ref_j} s{j + 1} {node_pos} {node_neg} '
-                                    f'{gain_vccs_b_j}\n')
+                            n_current_pos += 1
+                            node1 = node_pos
+                            node2 = node_pos = f'n_a{i + 1}_p_{n_current_pos}'
 
-                        # impedance representing S_j_i_k
+                        # Impedance representing S_j_i_k
                         if np.imag(pole) == 0.0:
                             # Real pole; Add parallel RC network via `rc_passive`
                             c = 1 / np.real(residue)
                             r = -1 * np.real(residue) / np.real(pole)
-                            f.write(f'X{j + 1}_{i + 1}_{n_current} {node_pos} {node_neg} rc_passive res={r} cap={c}\n')
+                            f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rc_passive res={r} cap={c}\n')
                         else:
                             # Complex pole of a conjugate pair; Add active or passive RCL network via `rcl_active`
                             x1 = np.real(residue) * np.real(pole)
@@ -4013,28 +3967,32 @@ class VectorFitting:
                             r1 = -2 * (x1 + x2) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
                             r2 = (2 * np.real(residue)) ** 2 / (-2 * (x1 - x2))
                             if r1 < 0:
-                                # calculated r1 is negative; this gets compensated with the transconductance gt1
+                                # Calculated r1 is negative; this gets compensated with the transconductance gt1
                                 gt1 = 2 / np.abs(r1)
                             else:
-                                # transconductance gt1 not required
+                                # Transconductance gt1 not required
                                 gt1 = 0.0
                             if r2 < 0:
-                                # calculated r2 is negative; this gets compensated with the transconductance gt2
+                                # Calculated r2 is negative; this gets compensated with the transconductance gt2
                                 gt2 = 2 / np.abs(r2)
                             else:
-                                # transconductance gt2 not required
+                                # Transconductance gt2 not required
                                 gt2 = 0.0
-                            f.write(f'X{j + 1}_{i + 1}_{n_current} {node_pos} {node_neg} rcl_active '
+
+                            f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rcl_active '
                                     f'cap={c} ind={l} res1={np.abs(r1)} res2={np.abs(r2)} gt1={gt1} gt2={gt2}\n')
 
-                        # prepare nodes for next impedance
-                        n_current += 1
-                        node_pos = f'n_{i + 1}_{n_current}'
-                        n_nodes_remaining = n_nodes_total - n_current
-                        if n_nodes_remaining == 1:
-                            node_neg = '0'
-                        else:
-                            node_neg = f'n_{i + 1}_{n_current + 1}'
+                    # Create the reflected wave b sources
+                    f.write(f'Gb{j + 1}_{i + 1}_p {node_ref_j} s{j + 1} {node_pos_begin} {node_pos} '
+                            f'{2 / np.sqrt(z0_j)}\n')
+
+                    f.write(f'Gb{j + 1}_{i + 1}_n {node_ref_j} s{j + 1} {node_neg_begin} {node_neg} '
+                            f'{2 / np.sqrt(z0_j)}\n')
+
+                # Create impedance chain termination resistors. They are 1 ohm but the value is not important.
+                # Their only purpose is to connect the impedance chains to gnd without using a 0 v VDC source.
+                f.write(f'Rtp{i + 1} {node_pos} 0 {1}\n')
+                f.write(f'Rtn{i + 1} {node_neg} 0 {1}\n')
 
             f.write(f'.ENDS {fitted_model_name}\n')
             f.write('*\n')
@@ -4262,6 +4220,13 @@ class VectorFitting:
 
     def _write_spice_subcircuit_s_admittance2(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool=False) -> None:
+        # This version of the admittance topology synthesizer uses a current source
+        # in parrallel to the port impedance as the port network instead of a voltage source
+        # in series with the port impedance.
+        #
+        # In Xyce those subckts generated with admittance2 simulate twice as fast in the
+        # linear solve. In transient there is almost no difference.
+
         """
         Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
         in spice simulator netlist syntax
