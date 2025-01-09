@@ -1109,7 +1109,7 @@ class VectorFitting:
             header += f'.LIN FORMAT=TOUCHSTONE2 LINTYPE=S DATAFORMAT=MA FILE={name}-xyce.s4p '
             header += 'WIDTH=15 PRECISION=12\n'
 
-            header += '*.TRAN 1ps 10ns\n'
+            header += '*.TRAN 1ps 100ns\n'
 
             # Create subcircuit pins
             if create_reference_pins:
@@ -3993,6 +3993,245 @@ class VectorFitting:
                 # Their only purpose is to connect the impedance chains to gnd without using a 0 v VDC source.
                 f.write(f'Rtp{i + 1} {node_pos} 0 {1}\n')
                 f.write(f'Rtn{i + 1} {node_neg} 0 {1}\n')
+
+            f.write(f'.ENDS {fitted_model_name}\n')
+            f.write('*\n')
+
+            # Subcircuit for an RCL equivalent impedance of a complex-conjugate pole-residue pair
+            f.write('.SUBCKT rcl_active 1 2 cap=1e-9 ind=100e-12 res1=1e3 res2=1e3 gt1=2e-3 gt2=2e-3\n')
+            f.write('L1 1 3 {ind}\n')
+            f.write('R1 3 2 {res1}\n')
+            f.write('G1 2 3 3 2 {gt1}\n')
+            f.write('C1 1 2 {cap}\n')
+            f.write('R2 1 2 {res2}\n')
+            f.write('G2 2 1 1 2 {gt2}\n')
+            f.write('.ENDS rcl_active\n')
+
+            f.write('*\n')
+
+            # Subcircuit for an RC equivalent impedance of a real pole-residue pair
+            f.write('.SUBCKT rc_passive 1 2 res=1e3 cap=1e-9\n')
+            f.write('C1 1 2 {cap}\n')
+            f.write('R1 1 2 {res}\n')
+            f.write('.ENDS rc_passive\n')
+
+    def _write_spice_subcircuit_s_impedance2(self, file: str, fitted_model_name: str = "s_equivalent",
+                                     create_reference_pins: bool = False) -> None:
+        """
+        Creates an equivalent N-port subcircuit based on its vector fitted S parameter responses
+        in spice simulator netlist syntax (compatible with ngspice, Xyce, ...).
+
+        Parameters
+        ----------
+        file : str
+            Path and filename including file extension (usually .sNp) for the subcircuit file.
+
+        fitted_model_name: str
+            Name of the resulting subcircuit, default "s_equivalent"
+
+        create_reference_pins: bool
+            If set to True, the synthesized subcircuit will have N pin-pairs:
+            p1 p1_ref p2 p2_ref ... pN pN_ref
+
+            If set to False, the synthesized subcircuit will have N pins
+            p1 p2 ... pN
+            In this case, the reference nodes will be internally connected
+            to the global ground net 0.
+
+            The default is False
+
+        Returns
+        -------
+        None
+
+        Examples
+        --------
+        Load and fit the `Network`, then export the equivalent subcircuit:
+
+        >>> nw_3port = skrf.Network('my3port.s3p')
+        >>> vf = skrf.VectorFitting(nw_3port)
+        >>> vf.auto_fit()
+        >>> vf.write_spice_subcircuit_s('/my3port_model.sp')
+
+        References
+        ----------
+        .. [1] G. Antonini, "SPICE Equivalent Circuits of Frequency-Domain Responses", IEEE Transactions on
+            Electromagnetic Compatibility, vol. 45, no. 3, pp. 502-512, August 2003,
+            doi: https://doi.org/10.1109/TEMC.2003.815528
+
+        .. [2] C. -C. Chou and J. E. Schutt-Ainé, "Equivalent Circuit Synthesis of Multiport S Parameters in
+            Pole–Residue Form," in IEEE Transactions on Components, Packaging and Manufacturing Technology,
+            vol. 11, no. 11, pp. 1971-1979, Nov. 2021, doi: 10.1109/TCPMT.2021.3115113
+
+        .. [3] Romano D, Antonini G, Grossner U, Kovačević-Badstübner I. Circuit synthesis techniques of
+            rational models of electromagnetic systems: A tutorial paper. Int J Numer Model. 2019
+            doi: https://doi.org/10.1002/jnm.2612
+
+        """
+
+        with open(file, 'w') as f:
+            netlist_header = self._get_netlist_header(create_reference_pins=create_reference_pins,
+                                                      fitted_model_name=fitted_model_name)
+            f.write(netlist_header)
+
+            # Write title line
+            f.write('* EQUIVALENT CIRCUIT FOR VECTOR FITTED S-MATRIX\n')
+            f.write('* Created using scikit-rf vectorFitting.py\n')
+            f.write('*\n')
+
+            # Create subcircuit pin string and reference nodes
+            if create_reference_pins:
+                str_input_nodes = " ".join(map(lambda x: f'p{x + 1} p{x + 1}_ref', range(self.network.nports)))
+            else:
+                str_input_nodes = " ".join(map(lambda x: f'p{x + 1}', range(self.network.nports)))
+
+            f.write(f'.SUBCKT {fitted_model_name} {str_input_nodes}\n')
+
+            for i in range(self.network.nports):
+                f.write('*\n')
+                f.write(f'* Port network for port {i + 1}\n')
+
+                if create_reference_pins:
+                    node_ref_i = f'p{i + 1}_ref'
+                else:
+                    node_ref_i = '0'
+
+                # Reference impedance (real, i.e. resistance) of port i
+                z0_i = np.real(self.network.z0[0, i])
+
+                # Dummy voltage source (v = 0) for port current sensing (I_i)
+                f.write(f'V{i + 1} p{i + 1} s{i + 1} 0\n')
+
+                # Port reference impedance Z0_i
+                f.write(f'R{i + 1} s{i + 1} {node_ref_i} {z0_i}\n')
+
+                # Initialize node counters for a_i (p) and -a_i (n)
+                n_current = 0
+                node = '0'
+
+                for j in range(self.network.nports):
+                    # Stacking order in VectorFitting class variables:
+                    # s11, s12, s13, ..., s21, s22, s23, ...
+                    i_response = j * self.network.nports + i
+
+                    # Get idx_pole_group and idx_pole_group_member for current response
+                    idx_pole_group=self.map_idx_response_to_idx_pole_group[i_response]
+                    idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[i_response]
+
+                    # Get residues
+                    residues = self.residues[idx_pole_group][idx_pole_group_member]
+
+                    # Get poles
+                    poles=self.poles[idx_pole_group]
+
+                    f.write('*\n')
+                    f.write(f'* Transfer from port {i + 1} to port {j + 1}\n')
+
+                    # Reference impedance (real, i.e. resistance) of port j
+                    z0_j = np.real(self.network.z0[0, j])
+
+                    if create_reference_pins:
+                        node_ref_j = f'p{j + 1}_ref'
+                    else:
+                        node_ref_j = '0'
+
+                    # Get proportional and constant term of the model
+                    d = self.constant[idx_pole_group][idx_pole_group_member]
+                    e = self.proportional[idx_pole_group][idx_pole_group_member]
+
+                    # R for constant term
+                    if d != 0.0:
+                        # Increment node counter
+                        n_current += 1
+                        node1 = node
+                        node2 = node = f'n_a{i + 1}_{n_current}'
+                        f.write(f'R{j + 1}_{i + 1} {node1} {node2} {np.abs(d)}\n')
+
+                        # Calculated resistence can be negative, but implementation must use positive values.
+                        if d < 0:
+                            f.write(f'Gb{j + 1}_{i + 1}_d {node_ref_j} s{j + 1} {node2} {node1} '
+                                f'{2 / np.sqrt(z0_j)}\n')
+                        else:
+                            f.write(f'Gb{j + 1}_{i + 1}_d {node_ref_j} s{j + 1} {node1} {node2} '
+                                f'{2 / np.sqrt(z0_j)}\n')
+
+                    # L for proportional term
+                    if e != 0.0:
+                        # Increment node counter
+                        n_current += 1
+                        node1 = node
+                        node2 = node = f'n_a{i + 1}_{n_current}'
+                        f.write(f'L{j + 1}_{i + 1} {node1} {node2} {np.abs(e)}\n')
+
+                        # Calculated resistence can be negative, but implementation must use positive values.
+                        if d < 0:
+                            f.write(f'Gb{j + 1}_{i + 1}_e {node_ref_j} s{j + 1} {node2} {node1} '
+                                f'{2 / np.sqrt(z0_j)}\n')
+                        else:
+                            f.write(f'Gb{j + 1}_{i + 1}_e {node_ref_j} s{j + 1} {node1} {node2} '
+                                f'{2 / np.sqrt(z0_j)}\n')
+
+                    # Transfer admittances represented by poles and residues
+                    for idx_pole in range(len(poles)):
+                        pole = poles[idx_pole]
+                        residue = residues[idx_pole]
+
+                        # Increment node counter
+                        n_current += 1
+                        node1 = node
+                        node2 = node = f'n_a{i + 1}_{n_current}'
+
+                        # Calculated component values can be negative, but implementation must use positive values.
+                        # The sign of the residue can be inverted, but then the inversion must be compensated by
+                        # flipping the polarity of the VCCS control voltage
+                        if np.real(residue) < 0.0:
+                            # Residue multiplication with -1 required
+                            residue = -1 * residue
+                            f.write(f'Gb{j + 1}_{i + 1}_{idx_pole} {node_ref_j} s{j + 1} {node2} {node1} '
+                                f'{2 / np.sqrt(z0_j)}\n')
+                        else:
+                            f.write(f'Gb{j + 1}_{i + 1}_{idx_pole} {node_ref_j} s{j + 1} {node1} {node2} '
+                                f'{2 / np.sqrt(z0_j)}\n')
+
+                        # Impedance representing S_j_i_k
+                        if np.imag(pole) == 0.0:
+                            # Real pole; Add parallel RC network via `rc_passive`
+                            c = 1 / np.real(residue)
+                            r = -1 * np.real(residue) / np.real(pole)
+                            f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rc_passive res={r} cap={c}\n')
+
+                        else:
+                            # Complex pole of a conjugate pair; Add active or passive RCL network via `rcl_active`
+                            x1 = np.real(residue) * np.real(pole)
+                            x2 = np.imag(residue) * np.imag(pole)
+                            c = 1 / (2 * np.real(residue))
+                            l = 2 * np.real(residue) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
+                            r1 = -2 * (x1 + x2) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
+                            r2 = (2 * np.real(residue)) ** 2 / (-2 * (x1 - x2))
+                            if r1 < 0:
+                                # Calculated r1 is negative; this gets compensated with the transconductance gt1
+                                gt1 = 2 / np.abs(r1)
+                            else:
+                                # Transconductance gt1 not required
+                                gt1 = 0.0
+                            if r2 < 0:
+                                # Calculated r2 is negative; this gets compensated with the transconductance gt2
+                                gt2 = 2 / np.abs(r2)
+                            else:
+                                # Transconductance gt2 not required
+                                gt2 = 0.0
+
+                            f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rcl_active '
+                                    f'cap={c} ind={l} res1={np.abs(r1)} res2={np.abs(r2)} gt1={gt1} gt2={gt2}\n')
+
+                # VCCS and CCS driving the transfer impedances with incident wave a = V/(2.0*sqrt(Z0)) + I*sqrt(Z0)/2
+                #
+                # These current sources in parallel realize the incident wave a. The types of the sources
+                # and their gains arise from the definition of the incident wave a at port i:
+                # a_i=v_i/(2*sqrt(z0_i)) + i_i*sqrt(z0_i)/2
+                # So we need a VCCS with a gain 1/(2*sqrt(z0_i)) in parallel with a CCCS with a gain sqrt(z0_i)/2
+                f.write(f'Ga{i + 1} 0 {node} p{i + 1} {node_ref_i} {1 / (2 * np.sqrt(z0_i))}\n')
+                f.write(f'Fa{i + 1} 0 {node} V{i + 1} {np.sqrt(z0_i) / 2}\n')
 
             f.write(f'.ENDS {fitted_model_name}\n')
             f.write('*\n')
