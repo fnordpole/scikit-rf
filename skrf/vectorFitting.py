@@ -1109,7 +1109,7 @@ class VectorFitting:
             header += f'.LIN FORMAT=TOUCHSTONE2 LINTYPE=S DATAFORMAT=MA FILE={name}-xyce.s4p '
             header += 'WIDTH=15 PRECISION=12\n'
 
-            header += '*.TRAN 1ps 100ns\n'
+            header += '*.TRAN 1ps 1000ns\n'
 
             # Create subcircuit pins
             if create_reference_pins:
