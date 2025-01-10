@@ -3957,27 +3957,67 @@ class VectorFitting:
                             f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rc_passive res={r} cap={c}\n')
                         else:
                             # Complex pole of a conjugate pair; Add active or passive RCL network via `rcl_active`
-                            x1 = np.real(residue) * np.real(pole)
-                            x2 = np.imag(residue) * np.imag(pole)
-                            c = 1 / (2 * np.real(residue))
-                            l = 2 * np.real(residue) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
-                            r1 = -2 * (x1 + x2) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
-                            r2 = (2 * np.real(residue)) ** 2 / (-2 * (x1 - x2))
-                            if r1 < 0:
-                                # Calculated r1 is negative; this gets compensated with the transconductance gt1
-                                gt1 = 2 / np.abs(r1)
-                            else:
-                                # Transconductance gt1 not required
-                                gt1 = 0.0
-                            if r2 < 0:
-                                # Calculated r2 is negative; this gets compensated with the transconductance gt2
-                                gt2 = 2 / np.abs(r2)
-                            else:
-                                # Transconductance gt2 not required
-                                gt2 = 0.0
+
+                            # Calculation of the values for r1, r2, l and c using the transfer function coefficients
+                            # and comparing them with the coefficients of the generic transfer function of a complex
+                            # conjugated pole pair (see Antonini paper) gives the equations eq1..eq4.
+                            #
+                            # Transfer function of r1+sl parallel to c parallel to r2:
+                            # H(s) = (s/c + r1/(lc)) / (s**2 + s(r1/l + 1/(r2 c)) + (r1/(r2 l c) + 1/(lc)))
+                            #
+                            # From Antonini:
+                            # H'(s) = (2 cre s - 2 (cre pre + cim pim)) / (s**2 - 2 pre s + abs(p)**2)
+                            #
+                            # Using these abbreviations in the code:
+                            # cre=np.real(residue)
+                            # cim=np.imag(residue)
+                            # pre=np.real(pole)
+                            # pim=np.imag(pole)
+                            #
+                            # from sympy import symbols, Eq, solve, re, im, Abs, simplify, ask, Q, printing
+                            #
+                            # # Define symbols
+                            # r1, r2 = symbols('r1 r2', real=True)
+                            # c, l = symbols('c l', real=True, positive=True)
+                            # cre = symbols('cre', real=True, positive=True)
+                            # cim, pre, pim = symbols('cim pre pim', real=True)
+                            #
+                            # # Equations from coefficient comparison:
+                            # eq1 = Eq(1 / c, 2 * cre)
+                            # eq2 = Eq(r1 / (l * c), -2 * (cre * pre + cim * pim))
+                            # eq3 = Eq(r1 / l + 1 / (r2 * c), -2 * pre)
+                            # eq4 = Eq(r1 / (r2 * l * c) + 1 / (l * c), Abs(pre + 1j*pim)**2)
+                            #
+                            # # Solve system of equations for r1, r2, c, l with constraints
+                            # solution = solve([eq1, eq2, eq3, eq4], [r1, r2, l, c], dict=True)
+                            # solution  = simplify(solution[0])
+                            # printing.pycode(solution)
+                            # solution
+                            #
+                            # Result solution:
+                            # c = 0.5/cre
+                            # l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
+                            # r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
+                            # r2 = 2.0*cre**2/(cim*pim - cre*pre)}
+                            #
+                            # Because cre is always positive (residue-flipping if real part is negative),
+                            # l is always positive as all terms that could be negative appear in power of two.
+                            # c is also always positive because of the residue flipping.
+                            # r1 and r2 can be negative. Most simulators tolerate that. If not, put a
+                            # transconductance with gm=-2/abs(r) in parallel to the resistor using the resistor's
+                            # voltage as a control voltage.
+
+                            cre=np.real(residue)
+                            cim=np.imag(residue)
+                            pre=np.real(pole)
+                            pim=np.imag(pole)
+                            c = 0.5/cre
+                            l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
+                            r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
+                            r2 = 2.0*cre**2/(cim*pim - cre*pre)}
 
                             f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rcl_active '
-                                    f'cap={c} ind={l} res1={np.abs(r1)} res2={np.abs(r2)} gt1={gt1} gt2={gt2}\n')
+                                    f'cap={c} ind={l} res1={r1} res2={r2}\n')
 
                     # Create the reflected wave b sources
                     f.write(f'Gb{j + 1}_{i + 1}_p {node_ref_j} s{j + 1} {node_pos_begin} {node_pos} '
@@ -3986,10 +4026,6 @@ class VectorFitting:
                     f.write(f'Gb{j + 1}_{i + 1}_n {node_ref_j} s{j + 1} {node_neg_begin} {node_neg} '
                             f'{2 / np.sqrt(z0_j)}\n')
 
-                # Create impedance chain termination resistors. They are 1 ohm but the value is not important.
-                # Their only purpose is to connect the impedance chains to gnd without using a 0 v VDC source.
-                #f.write(f'Rtp{i + 1} {node_pos} 0 {1}\n')
-                #f.write(f'Rtn{i + 1} {node_neg} 0 {1}\n')
                 # VCCS and CCS driving the transfer impedances with incident wave a = V/(2.0*sqrt(Z0)) + I*sqrt(Z0)/2
                 #
                 # These current sources in parallel realize the incident wave a. The types of the sources
@@ -4003,13 +4039,11 @@ class VectorFitting:
             f.write('*\n')
 
             # Subcircuit for an RCL equivalent impedance of a complex-conjugate pole-residue pair
-            f.write('.SUBCKT rcl_active 1 2 cap=1e-9 ind=100e-12 res1=1e3 res2=1e3 gt1=2e-3 gt2=2e-3\n')
+            f.write('.SUBCKT rcl_active 1 2 cap=1e-9 ind=100e-12 res1=1e3 res2=1e3\n')
             f.write('L1 1 3 {ind}\n')
             f.write('R1 3 2 {res1}\n')
-            f.write('G1 2 3 3 2 {gt1}\n')
             f.write('C1 1 2 {cap}\n')
             f.write('R2 1 2 {res2}\n')
-            f.write('G2 2 1 1 2 {gt2}\n')
             f.write('.ENDS rcl_active\n')
 
             f.write('*\n')
@@ -4211,27 +4245,67 @@ class VectorFitting:
 
                         else:
                             # Complex pole of a conjugate pair; Add active or passive RCL network via `rcl_active`
-                            x1 = np.real(residue) * np.real(pole)
-                            x2 = np.imag(residue) * np.imag(pole)
-                            c = 1 / (2 * np.real(residue))
-                            l = 2 * np.real(residue) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
-                            r1 = -2 * (x1 + x2) / ((np.imag(pole)) ** 2 + (x2 / np.real(residue)) ** 2)
-                            r2 = (2 * np.real(residue)) ** 2 / (-2 * (x1 - x2))
-                            if r1 < 0:
-                                # Calculated r1 is negative; this gets compensated with the transconductance gt1
-                                gt1 = 2 / np.abs(r1)
-                            else:
-                                # Transconductance gt1 not required
-                                gt1 = 0.0
-                            if r2 < 0:
-                                # Calculated r2 is negative; this gets compensated with the transconductance gt2
-                                gt2 = 2 / np.abs(r2)
-                            else:
-                                # Transconductance gt2 not required
-                                gt2 = 0.0
+
+                            # Calculation of the values for r1, r2, l and c using the transfer function coefficients
+                            # and comparing them with the coefficients of the generic transfer function of a complex
+                            # conjugated pole pair (see Antonini paper) gives the equations eq1..eq4.
+                            #
+                            # Transfer function of r1+sl parallel to c parallel to r2:
+                            # H(s) = (s/c + r1/(lc)) / (s**2 + s(r1/l + 1/(r2 c)) + (r1/(r2 l c) + 1/(lc)))
+                            #
+                            # From Antonini:
+                            # H'(s) = (2 cre s - 2 (cre pre + cim pim)) / (s**2 - 2 pre s + abs(p)**2)
+                            #
+                            # Using these abbreviations in the code:
+                            # cre=np.real(residue)
+                            # cim=np.imag(residue)
+                            # pre=np.real(pole)
+                            # pim=np.imag(pole)
+                            #
+                            # from sympy import symbols, Eq, solve, re, im, Abs, simplify, ask, Q, printing
+                            #
+                            # # Define symbols
+                            # r1, r2 = symbols('r1 r2', real=True)
+                            # c, l = symbols('c l', real=True, positive=True)
+                            # cre = symbols('cre', real=True, positive=True)
+                            # cim, pre, pim = symbols('cim pre pim', real=True)
+                            #
+                            # # Equations from coefficient comparison:
+                            # eq1 = Eq(1 / c, 2 * cre)
+                            # eq2 = Eq(r1 / (l * c), -2 * (cre * pre + cim * pim))
+                            # eq3 = Eq(r1 / l + 1 / (r2 * c), -2 * pre)
+                            # eq4 = Eq(r1 / (r2 * l * c) + 1 / (l * c), Abs(pre + 1j*pim)**2)
+                            #
+                            # # Solve system of equations for r1, r2, c, l with constraints
+                            # solution = solve([eq1, eq2, eq3, eq4], [r1, r2, l, c], dict=True)
+                            # solution  = simplify(solution[0])
+                            # printing.pycode(solution)
+                            # solution
+                            #
+                            # Result solution:
+                            # c = 0.5/cre
+                            # l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
+                            # r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
+                            # r2 = 2.0*cre**2/(cim*pim - cre*pre)}
+                            #
+                            # Because cre is always positive (residue-flipping if real part is negative),
+                            # l is always positive as all terms that could be negative appear in power of two.
+                            # c is also always positive because of the residue flipping.
+                            # r1 and r2 can be negative. Most simulators tolerate that. If not, put a
+                            # transconductance with gm=-2/abs(r) in parallel to the resistor using the resistor's
+                            # voltage as a control voltage.
+
+                            cre=np.real(residue)
+                            cim=np.imag(residue)
+                            pre=np.real(pole)
+                            pim=np.imag(pole)
+                            c = 0.5/cre
+                            l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
+                            r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
+                            r2 = 2.0*cre**2/(cim*pim - cre*pre)}
 
                             f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rcl_active '
-                                    f'cap={c} ind={l} res1={np.abs(r1)} res2={np.abs(r2)} gt1={gt1} gt2={gt2}\n')
+                                    f'cap={c} ind={l} res1={r1} res2={r2}\n')
 
                 # VCCS and CCS driving the transfer impedances with incident wave a = V/(2.0*sqrt(Z0)) + I*sqrt(Z0)/2
                 #
@@ -4246,13 +4320,11 @@ class VectorFitting:
             f.write('*\n')
 
             # Subcircuit for an RCL equivalent impedance of a complex-conjugate pole-residue pair
-            f.write('.SUBCKT rcl_active 1 2 cap=1e-9 ind=100e-12 res1=1e3 res2=1e3 gt1=2e-3 gt2=2e-3\n')
+            f.write('.SUBCKT rcl_active 1 2 cap=1e-9 ind=100e-12 res1=1e3 res2=1e3\n')
             f.write('L1 1 3 {ind}\n')
             f.write('R1 3 2 {res1}\n')
-            f.write('G1 2 3 3 2 {gt1}\n')
             f.write('C1 1 2 {cap}\n')
             f.write('R2 1 2 {res2}\n')
-            f.write('G2 2 1 1 2 {gt2}\n')
             f.write('.ENDS rcl_active\n')
 
             f.write('*\n')
