@@ -4014,7 +4014,7 @@ class VectorFitting:
                             c = 0.5/cre
                             l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
                             r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
-                            r2 = 2.0*cre**2/(cim*pim - cre*pre)}
+                            r2 = 2.0*cre**2/(cim*pim - cre*pre)
 
                             f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rcl_active '
                                     f'cap={c} ind={l} res1={r1} res2={r2}\n')
@@ -4302,7 +4302,7 @@ class VectorFitting:
                             c = 0.5/cre
                             l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
                             r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
-                            r2 = 2.0*cre**2/(cim*pim - cre*pre)}
+                            r2 = 2.0*cre**2/(cim*pim - cre*pre)
 
                             f.write(f'X{j + 1}_{i + 1}_{idx_pole} {node1} {node2} rcl_active '
                                     f'cap={c} ind={l} res1={r1} res2={r2}\n')
