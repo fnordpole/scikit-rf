@@ -3998,7 +3998,7 @@ class VectorFitting:
                             # c = 0.5/cre
                             # l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
                             # r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
-                            # r2 = 2.0*cre**2/(cim*pim - cre*pre)}
+                            # r2 = 2.0*cre**2/(cim*pim - cre*pre)
                             #
                             # Because cre is always positive (residue-flipping if real part is negative),
                             # l is always positive as all terms that could be negative appear in power of two.
@@ -4286,7 +4286,7 @@ class VectorFitting:
                             # c = 0.5/cre
                             # l = 2.0*cre**3/(pim**2*(cim**2 + cre**2))
                             # r1 = 2.0*cre**2*(-cim*pim - cre*pre)/(pim**2*(cim**2 + cre**2))
-                            # r2 = 2.0*cre**2/(cim*pim - cre*pre)}
+                            # r2 = 2.0*cre**2/(cim*pim - cre*pre)
                             #
                             # Because cre is always positive (residue-flipping if real part is negative),
                             # l is always positive as all terms that could be negative appear in power of two.
