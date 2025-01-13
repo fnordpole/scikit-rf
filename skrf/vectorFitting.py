@@ -3758,13 +3758,20 @@ class VectorFitting:
 
         """
         if topology == 'impedance_v1':
-            return self._write_spice_subcircuit_s_impedance_v1(file, fitted_model_name, create_reference_pins)
+            self._write_spice_subcircuit_s_impedance_v1(file, fitted_model_name, create_reference_pins)
+
         elif topology == 'impedance_v2':
-            return self._write_spice_subcircuit_s_impedance_v2(file, fitted_model_name, create_reference_pins)
+            self._write_spice_subcircuit_s_impedance_v2(file, fitted_model_name, create_reference_pins)
         elif topology == 'admittance_v1':
-            return self._write_spice_subcircuit_s_admittance_v1(file, fitted_model_name, create_reference_pins)
+            self._write_spice_subcircuit_s_admittance_v1(file, fitted_model_name, create_reference_pins)
         elif topology == 'admittance_v2':
-            return self._write_spice_subcircuit_s_admittance_v2(file, fitted_model_name, create_reference_pins)
+            self._write_spice_subcircuit_s_admittance_v2(file, fitted_model_name, create_reference_pins)
+        else:
+            warnings.warn('Invalid choice of topology. Proceeding with impedance_v2',
+                          UserWarning, stacklevel=2)
+            self._write_spice_subcircuit_s_impedance_v2(file, fitted_model_name, create_reference_pins)
+
+        print(f'Wrote netlist to {file} using topology {topology}')
 
     def _write_spice_subcircuit_s_impedance_v1(self, file: str, fitted_model_name: str = "s_equivalent",
                                      create_reference_pins: bool = False) -> None:
