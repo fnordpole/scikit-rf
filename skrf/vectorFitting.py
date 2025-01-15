@@ -2597,15 +2597,6 @@ class VectorFitting:
                              'not make any sense; you need to run vector_fit() with option `fit_proportional=False` '
                              'first.')
 
-        # Todo: Clarify why the following code is commented out.
-        # # the network needs to be reciprocal for this passivity test method to work: S = transpose(S)
-        # if not np.allclose(self.residues, np.transpose(self.residues)) or \
-        #         not np.allclose(self.constant, np.transpose(self.constant)) or \
-        #         not np.allclose(self.proportional, np.transpose(self.proportional)):
-        #     logger.error('Passivity testing with unsymmetrical model parameters is not supported. '
-        #                   'The model needs to be reciprocal.')
-        #     return
-
         if idx_pole_group is None:
             # Return list of violation bands with one item per pole group for all pole groups
             violation_bands=[]
@@ -2619,7 +2610,51 @@ class VectorFitting:
         return violation_bands
 
     def _passivity_test(self, idx_pole_group) -> np.ndarray:
-        # Implements the core of passivity test. Description of arguments see passivity_test
+        # Runs either the half size or hamiltonian passivity test, depending on symmetry.
+        # Description of arguments see passivity_test
+        #
+        # Note on np.allclose: If the following equation is element-wise True, then allclose returns True.:
+        # absolute(a - b) <= (atol + rtol * absolute(b))
+        #
+        # The default value of atol is not appropriate when the reference value b has magnitude smaller than one.
+        # For example, it is unlikely that a = 1e-9 and b = 2e-9 should be considered “close”, yet allclose(1e-9, 2e-9)
+        # is True with default settings. Be sure to select atol for the use case at hand, especially for defining the
+        # threshold below which a non-zero value in a will be considered “close” to a very small or zero value in b.
+        # Defaults: rtol=1e-05, atol=1e-08
+        #
+        # Note: I leave it at default atol for now but this should be investigated and maybe adjusted.
+        residues_is_symmetric = np.allclose(
+            self.residues[idx_pole_group], np.transpose(self.residues[idx_pole_group]))
+        constant_is_symmetric = np.allclose(
+            self.constant[idx_pole_group], np.transpose(self.constant[idx_pole_group]))
+        is_symmetric = residues_is_symmetric and constant_is_symmetric
+
+        if is_symmetric:
+            print("Starting fast half size passivity test because matrix is symmetric")
+            return self._passivity_test_half_size(idx_pole_group)
+        else:
+            print("Starting full size hamiltonian passivity test because matrix is not symmetric")
+            return self._passivity_test_hamiltonian(idx_pole_group)
+
+    def _passivity_test_hamiltonian(self, idx_pole_group) -> np.ndarray:
+        # Hamiltonian based passivity test. Description of arguments see passivity_test
+        # Works also for non-symmetric state space model
+
+        # Get state-space matrices
+        A, B, C, D, E = self._get_ABCDE(idx_pole_group)
+
+        n_ports = np.shape(D)[0]
+
+        # Todo
+
+        return n_ports
+
+    def _passivity_test_half_size(self, idx_pole_group) -> np.ndarray:
+        # Half-size-matrix passivity test. Description of arguments see passivity_test
+
+        # The responses that are used to create the state space model must be symmetric because the algorithm assumes
+        # that the state space model is also symmetric. This means that the residues, proportional and constant all
+        # must be symmetric. This needs to be ensured before calling this method.
 
         # Get state-space matrices
         A, B, C, D, E = self._get_ABCDE(idx_pole_group)
