@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from scipy import integrate
 from scipy.signal import find_peaks
+from scipy.linalg import issymmetric
 
 from .util import Axes, axes_kwarg
 
@@ -2623,12 +2624,35 @@ class VectorFitting:
         # Defaults: rtol=1e-05, atol=1e-08
         #
         # Note: I leave it at default atol for now but this should be investigated and maybe adjusted.
-        residues_is_symmetric = np.allclose(
-            self.residues[idx_pole_group], np.transpose(self.residues[idx_pole_group]))
-        constant_is_symmetric = np.allclose(
-            self.constant[idx_pole_group], np.transpose(self.constant[idx_pole_group]))
-        is_symmetric = residues_is_symmetric and constant_is_symmetric
 
+        # Get residues and constant
+        residues = self.residues[idx_pole_group]
+        constant = self.constant[idx_pole_group]
+
+        # Calculate n_responses is this pole group
+        n_responses = np.size(residues, axis=0)
+
+        # Initialize symmetry flag. Will be set to True if residues and constant are both symmetric.
+        is_symmetric = False
+
+        if n_responses >= 4 and np.mod(np.sqrt(n_responses), 1) == 0:
+            # Calculate n_matrix
+            n_matrix = int(np.sqrt(n_responses))
+            # Reshape only the first residue of all responses into
+            # size sqrt(n_responses) x sqrt(n_responses). It is assumed that for the other residues
+            # the symmetry will be the same.
+            residues = np.reshape(residues[:, 0], shape=(n_matrix, n_matrix))
+            # Test for symmetry
+            residues_is_symmetric = issymmetric(residues, rtol=1e-5)
+
+            # Also check constant symmetry if residues are symmetric
+            if residues_is_symmetric:
+                # Reshape constant into sqrt(n_responses) x sqrt(n_responses)
+                constant = np.reshape(constant, shape=(n_matrix, n_matrix))
+                # Test for symmetry
+                is_symmetric = issymmetric(constant, rtol=1e-5)
+
+        # Run passivity test depending on symmetry
         if is_symmetric:
             print("Starting fast half size passivity test because matrix is symmetric")
             return self._passivity_test_half_size(idx_pole_group)
