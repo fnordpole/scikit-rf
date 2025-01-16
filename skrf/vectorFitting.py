@@ -10,6 +10,8 @@ import numpy as np
 from scipy import integrate
 from scipy.signal import find_peaks
 from scipy.linalg import issymmetric
+from numpy.linalg import inv
+from numpy import identity, transpose
 
 from .util import Axes, axes_kwarg
 
@@ -2515,7 +2517,7 @@ class VectorFitting:
         return A, B, C, D, E
 
     @staticmethod
-    def _get_s_from_ABCDE(freqs: np.ndarray,
+    def _get_s_from_ABCDE(omega: np.ndarray,
                           A: np.ndarray, B: np.ndarray, C: np.ndarray, D: np.ndarray, E: np.ndarray) -> np.ndarray:
         """
         Private method.
@@ -2537,14 +2539,14 @@ class VectorFitting:
         ndarray
             Complex-valued S-matrices (fxNxN) calculated at frequencies `freqs`.
         """
-
+        s = 1j * omega
         dim_A = np.shape(A)[0]
-        stsp_poles = np.linalg.inv(2j * np.pi * freqs[:, None, None] * np.identity(dim_A)[None, :, :] - A[None, :, :])
+        stsp_poles = np.linalg.inv(s[:, None, None] * np.identity(dim_A)[None, :, :] - A[None, :, :])
         stsp_S = np.matmul(np.matmul(C, stsp_poles), B)
-        stsp_S += D + 2j * np.pi * freqs[:, None, None] * E
+        stsp_S += D + s[:, None, None] * E
         return stsp_S
 
-    def passivity_test(self, idx_pole_group = None, parameter_type: str = 's'):
+    def passivity_test(self, idx_pole_group = None, parameter_type: str = 's', verbose: bool = False, method = None):
         """
         Evaluates the passivity of reciprocal vector fitted models by means of a half-size test matrix [#]_. Any
         existing frequency bands of passivity violations will be returned as a sorted list.
@@ -2555,6 +2557,10 @@ class VectorFitting:
             Representation type of the fitted frequency responses. Either *scattering* (:attr:`s` or :attr:`S`),
             *impedance* (:attr:`z` or :attr:`Z`) or *admittance* (:attr:`y` or :attr:`Y`). Currently, only scattering
             parameters are supported for passivity evaluation.
+
+        method: str, optional
+            Can be set to 'half-size' or 'hamiltonian' for force one or the other method. Note that if the matrix
+            is not symmetric and half-size is specified, the hamiltonian test will be used instead.
 
         Raises
         ------
@@ -2603,14 +2609,14 @@ class VectorFitting:
             violation_bands=[]
             n_pole_groups=len(self.poles)
             for idx_pole_group in range(n_pole_groups):
-                violation_bands.append(self._passivity_test(idx_pole_group))
+                violation_bands.append(self._passivity_test(idx_pole_group, verbose, method))
         else:
             # Return only the violation bands for the specified pole group
-            violation_bands=self._passivity_test(idx_pole_group)
+            violation_bands=self._passivity_test(idx_pole_group, verbose, method)
 
         return violation_bands
 
-    def _passivity_test(self, idx_pole_group) -> np.ndarray:
+    def _passivity_test(self, idx_pole_group, verbose = False, method = None) -> np.ndarray:
         # Runs either the half size or hamiltonian passivity test, depending on symmetry.
         # Description of arguments see passivity_test
         #
@@ -2653,32 +2659,85 @@ class VectorFitting:
                 is_symmetric = issymmetric(constant, rtol=1e-5)
 
         # Run passivity test depending on symmetry
-        if is_symmetric:
-            print("Starting fast half size passivity test because matrix is symmetric")
-            return self._passivity_test_half_size(idx_pole_group)
-        else:
-            print("Starting full size hamiltonian passivity test because matrix is not symmetric")
+        if not is_symmetric:
+            # If not symmetric we always use the hamiltonian test regardless of method requested
+            if verbose:
+                print("Using full size hamiltonian passivity test because matrix is not symmetric")
             return self._passivity_test_hamiltonian(idx_pole_group)
+        else:
+            # If symmetric, we use half-size by default but we use hamiltonian if requested via method
 
-    def _passivity_test_hamiltonian(self, idx_pole_group) -> np.ndarray:
+            # Check if method is set
+            if method is not None:
+                # Check if it is hamiltonian
+                if method.lower() == 'hamiltonian':
+                    if verbose:
+                        print("Using full size hamiltonian passivity test because matrix is not symmetric")
+                    return self._passivity_test_hamiltonian(idx_pole_group)
+
+            # Otherwise use half size as default
+            if verbose:
+                print("Using fast half size passivity test because matrix is symmetric")
+            return self._passivity_test_half_size(idx_pole_group)
+
+    def _passivity_test_hamiltonian(self, idx_pole_group, reltol = 1e-9) -> np.ndarray:
         # Hamiltonian based passivity test. Description of arguments see passivity_test
         # Works also for non-symmetric state space model
+        #
+        # The operator @ is the same as numpy.matmul()
 
         # Get state-space matrices
         A, B, C, D, E = self._get_ABCDE(idx_pole_group)
 
         n_ports = np.shape(D)[0]
 
-        # Todo
+        # Build hamiltonian matrix M.
+        # As defined in equation 8 in "Fast Passivity Assessment for S -Parameter Rational Models Via
+        # a Half-Size Test Matrix", Bjørn Gustavsen and Adam Semlyen, 2008
+        R_roof_inv = inv(transpose(D) @ D) - identity(n_ports)
+        S_roof_inv = inv(D @ transpose(D)) - identity(n_ports)
+        M11 = A - B @ R_roof_inv @ transpose(D) @ C
+        M12 = -1 * B @ R_roof_inv @ transpose(B)
+        M21 = transpose(C) @ S_roof_inv @ C
+        M22 = -1 * transpose(A) + transpose(C) @ D @ R_roof_inv @ transpose(B)
+        M = np.block([[M11, M12], [M21, M22]])
 
-        return n_ports
+        # Calculate eigenvalues of M
+        eigvals_M = np.linalg.eigvals(M)
+
+        # The eigvals of M will be either real or complex conjugated pairs.
+        # Additionally, we are only interested in purely imaginary eigenvalues because those are the
+        # crossover frequencies.
+        # Due to noise we can still have a very small non-zero real part so we compare them against the absolute value
+        # and set a threshold.
+
+        # Remove purely real eigenvalues
+        eigvals_M = eigvals_M[(np.imag(eigvals_M) != 0)]
+
+        # Remove eigenvalues that are not purely imaginary
+        eigvals_M = eigvals_M[(np.abs(np.real(eigvals_M)) < reltol * np.abs(np.imag(eigvals_M)))]
+
+        # Take only the imaginary parts
+        eigvals_M = np.imag(eigvals_M)
+
+        # Remove negative-imaginary eigenvalues of complex conjugate pairs and we obtain the crossover frequencies
+        # at which the singular values cross unity
+        crossover_omegas = eigvals_M[(eigvals_M > 0)]
+
+        # Now we know only the crossover frequencies at which the singular values cross unity but we don't know yet
+        # whether we went above or below unity. Identify frequency bands of passivity violations
+        violation_bands = self._get_violation_bands(A, B, C, D, E, crossover_omegas)
+
+        return violation_bands
 
     def _passivity_test_half_size(self, idx_pole_group) -> np.ndarray:
         # Half-size-matrix passivity test. Description of arguments see passivity_test
-
+        #
         # The responses that are used to create the state space model must be symmetric because the algorithm assumes
         # that the state space model is also symmetric. This means that the residues, proportional and constant all
         # must be symmetric. This needs to be ensured before calling this method.
+        #
+        # The operator @ is the same as numpy.matmul()
 
         # Get state-space matrices
         A, B, C, D, E = self._get_ABCDE(idx_pole_group)
@@ -2686,59 +2745,67 @@ class VectorFitting:
         n_ports = np.shape(D)[0]
 
         # Build half-size test matrix P from state-space matrices A, B, C, D
-        inv_neg = np.linalg.inv(D - np.identity(n_ports))
-        inv_pos = np.linalg.inv(D + np.identity(n_ports))
-        prod_neg = np.matmul(np.matmul(B, inv_neg), C)
-        prod_pos = np.matmul(np.matmul(B, inv_pos), C)
-        P = np.matmul(A - prod_neg, A - prod_pos)
+        inv_neg = inv(D - identity(n_ports))
+        inv_pos = inv(D + identity(n_ports))
+        P = (A - B @ inv_neg @ C) @ (A - B @ inv_pos @ C)
 
         # Extract eigenvalues of P
         P_eigs = np.linalg.eigvals(P)
 
         # Purely imaginary square roots of eigenvalues identify frequencies (2*pi*f) of borders of passivity violations
-        # Note: np.sqrt can't handle negative arguments. Need to use np.emath.sqrt for this code to work:
-        freqs_violation = []
-        for sqrt_eigenval in np.emath.sqrt(P_eigs):
-            if np.real(sqrt_eigenval) == 0.0:
-                freqs_violation.append(np.imag(sqrt_eigenval) / 2 / np.pi)
+        # Note: np.sqrt can't handle negative arguments. Need to use np.emath.sqrt for this code to work.
+        P_eigs_sqrt = np.emath.sqrt(P_eigs)
 
-        # Include dc (0) unless it's already included
-        if len(np.nonzero(np.array(freqs_violation) == 0.0)[0]) == 0:
-            freqs_violation.append(0.0)
+        # Keep only those eigvals of P with a zero real part
+        P_eigs_sqrt = P_eigs_sqrt[np.real(P_eigs_sqrt) == 0]
+
+        # Crossover frequencies are the purely imaginary elements
+        crossover_omegas = np.imag(P_eigs_sqrt)
+
+        # Now we know only the crossover frequencies at which the singular values cross unity but we don't know yet
+        # whether we went above or below unity. Identify frequency bands of passivity violations
+        violation_bands = self._get_violation_bands(A, B, C, D, E, crossover_omegas)
+
+        return violation_bands
+
+    def _get_violation_bands(self, A, B, C, D, E, crossover_omegas) -> np.ndarray:
+        # Calculates the violation bands at which the singular values are above unity.
+        # The input is the state space model and a list of crossover frequencies
+        # at which the singular values cross unity
+
+        # Include dc (0) unless it's already included. We need this for the next step because we will probe every
+        # interval whether it is above or below unity. If we have a first crossing at x, the first band that we will
+        # probe is [0, x].
+        if len(np.nonzero(crossover_omegas == 0.0)[0]) == 0:
+            crossover_omegas = np.append(crossover_omegas, 0)
 
         # Sort the output from lower to higher frequencies
-        freqs_violation = np.sort(freqs_violation)
+        crossover_omegas = np.sort(crossover_omegas)
 
-        # Identify frequency bands of passivity violations
-
-        # Sweep the bands between crossover frequencies and identify bands of passivity violations
+        # Identify bands of passivity violations
         violation_bands = []
-        for i, freq in enumerate(freqs_violation):
-            if i == len(freqs_violation) - 1:
+        for i, omega in enumerate(crossover_omegas):
+            if i == len(crossover_omegas) - 1:
                 # Last band stops always at infinity
-                f_start = freq
-                f_stop = np.inf
-                f_center = 1.1 * f_start # 1.1 is chosen arbitrarily to have any frequency for evaluation
+                omega_start = omega
+                omega_stop = np.inf
+                omega_center = 1.1 * omega_start # 1.1 is chosen arbitrarily to have any frequency for evaluation
             else:
                 # Intermediate band between this frequency and the previous one
-                f_start = freq
-                f_stop = freqs_violation[i + 1]
-                f_center = 0.5 * (f_start + f_stop)
+                omega_start = omega
+                omega_stop = crossover_omegas[i + 1]
+                omega_center = 0.5 * (omega_start + omega_stop)
 
             # Calculate singular values at the center frequency between crossover frequencies to identify violations
-            s_center = self._get_s_from_ABCDE(np.array([f_center]), A, B, C, D, E)
+            s_center = self._get_s_from_ABCDE(np.array([omega_center]), A, B, C, D, E)
             sigma = np.linalg.svd(s_center[0], compute_uv=False)
-            passive = True
-            for singval in sigma:
-                if singval > 1:
-                    # Passivity violation in this band
-                    passive = False
-            if not passive:
+
+            # Check if all singular values are less than unity
+            is_passive = len(np.nonzero(sigma[sigma > 1])[0]) == 0
+
+            if not is_passive:
                 # Add this band to the list of passivity violations
-                if violation_bands is None:
-                    violation_bands = [[f_start, f_stop]]
-                else:
-                    violation_bands.append([f_start, f_stop])
+                violation_bands.append([omega_start / (2 * np.pi), omega_stop / (2 * np.pi)])
 
         return np.array(violation_bands)
 
@@ -2917,6 +2984,7 @@ class VectorFitting:
         else:
             f_eval_max = 1.2 * f_viol_max
         freqs_eval = np.linspace(0, f_eval_max, n_samples)
+        omega_eval = 2 * np.pi * freqs_eval
 
         A, B, C, D, E = self._get_ABCDE(idx_pole_group)
         dim_A = np.shape(A)[0]
@@ -2957,9 +3025,9 @@ class VectorFitting:
 
             # calculate S-matrix at this frequency (shape fxNxN)
             if D_t is not None:
-                s_eval = self._get_s_from_ABCDE(freqs_eval, A, B, C_t, D_t, E)
+                s_eval = self._get_s_from_ABCDE(omega_eval, A, B, C_t, D_t, E)
             else:
-                s_eval = self._get_s_from_ABCDE(freqs_eval, A, B, C_t, D, E)
+                s_eval = self._get_s_from_ABCDE(omega_eval, A, B, C_t, D, E)
 
             # Singular value decomposition
             u, sigma, vh = np.linalg.svd(s_eval, full_matrices=False)
@@ -3681,6 +3749,9 @@ class VectorFitting:
             else:
                 freqs = self.network.f
 
+        # Calculate omega
+        omega = 2 * np.pi * freqs
+
         if idx_pole_group is None:
             n_pole_groups = len(self.poles)
             pole_group_indices = np.arange(n_pole_groups)
@@ -3696,7 +3767,7 @@ class VectorFitting:
             n_ports = np.shape(D)[0]
 
             # Calculate singular values for each frequency
-            u, sigma, vh = np.linalg.svd(self._get_s_from_ABCDE(freqs, A, B, C, D, E))
+            u, sigma, vh = np.linalg.svd(self._get_s_from_ABCDE(omega, A, B, C, D, E))
 
             # Plot the frequency response of each singular value
             for n in range(n_ports):
