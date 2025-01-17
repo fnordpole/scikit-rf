@@ -3241,12 +3241,12 @@ class VectorFitting:
         return True
 
     def passivity_enforce(self,
-                          n_samples: int = 200,
-                          maximum_frequency_of_interest: float = None,
-                          parameter_type: str = 's',
-                          max_iterations: int = 100,
-                          verbose = None,
-                          ) -> None:
+        n_samples: int = 200,
+        maximum_frequency_of_interest: float = None,
+        parameter_type: str = 's',
+        max_iterations: int = 100,
+        verbose = False,
+        ) -> None:
         """
         Enforces the passivity of the vector fitted model, if required. This is an implementation of the method
         presented in [#]_. Passivity is achieved by updating the residues and the constants.
@@ -3308,7 +3308,7 @@ class VectorFitting:
         for idx_pole_group in range(n_pole_groups):
             logger.info(f'Starting passivity enforcement for pole group {idx_pole_group + 1} of {n_pole_groups}')
             self._passivity_enforce(idx_pole_group, n_samples,
-                                    maximum_frequency_of_interest, parameter_type, max_iterations)
+                                    maximum_frequency_of_interest, parameter_type, max_iterations, verbose)
             logger.info(f'Finished passivity enforcement for pole group {idx_pole_group + 1} of {n_pole_groups}')
 
         # Print model summary
@@ -3322,11 +3322,13 @@ class VectorFitting:
                           f'bands:\n{violation_bands}.\nTry running this routine again with a larger number of samples '
                           '(parameter `n_samples`).', RuntimeWarning, stacklevel=2)
 
-    def _passivity_enforce(self, idx_pole_group,
+    def _passivity_enforce(self,
+        idx_pole_group,
         n_samples,
         maximum_frequency_of_interest,
         parameter_type,
         max_iterations,
+        verbose,
         ) -> None:
         # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
 
@@ -3388,15 +3390,33 @@ class VectorFitting:
         #omega_eval = np.insert(omega_eval, 0, [1, 5, 10, 100, 500, 1000, 1e4] )
         s_eval = 1j * omega_eval
 
+        # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
+        # how this parameter influences the algorithm.
+        delta = 0.999
+
+        # Get state space model C, D and E
+        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
+
+        # Size n_A of square matrix A
+        n_A = np.size(A, axis=0)
+
+        # Build F
+        F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
+
+        # Flag that's True if we have non zero D
+        have_D = len(np.nonzero(D)[0]) != 0
+
         # Get state space model A and B for response 0. They are the same for every idx_response
         A0, B0 = self._get_state_space_AB(idx_pole_group, idx_response = 0)
 
         # Size n_A0 of square matrix A0
         n_A0 = np.size(A0, axis=0)
 
-        # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
-        # how this parameter influences the algorithm.
-        delta = 0.999
+        # Initialize Ct to C
+        Ct = C
+
+        # Initialize Dt to D
+        Dt = D
 
         # Build matrix F = (sI - A)^-1 B
         # Multiple things can be improved a lot in the calculation of F.
@@ -3406,7 +3426,18 @@ class VectorFitting:
         # Next, the multiplication with B does not need to be a matrix multiplication but can be done
         # in a simple element-wise multiplication because F is diagonal!
         # All of this saves a ton of memory because the sparse F matrix is never built and a ton of cpu.
-        F0 = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A0)[None, :, :] - A0[None, :, :]) @ B0[None, :, :]
+        if have_D:
+            F0 = np.empty((n_samples, n_A0 + 1, 1))
+            F0[:, :-1] = \
+                np.linalg.inv(s_eval[:, None, None] * np.identity(n_A0)[None, :, :] - A0[None, :, :]) @ B0[None, :, :]
+            D_norm = np.linalg.norm(F0[:, :-1]) / (n_samples * n_A)
+            F0[:, -1] = 1 * D_norm[None, None]
+            if verbose:
+                print('Passivity enforcement: Perturbing residues and constant')
+        else:
+            F0 = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A0)[None, :, :] - A0[None, :, :]) @ B0[None, :, :]
+            if verbose:
+                print('Passivity enforcement: Perturbing only residues')
 
         # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
         F0_transpose = np.squeeze(F0)
@@ -3420,35 +3451,13 @@ class VectorFitting:
         # Get number of residues
         n_residues = self.get_model_order(idx_pole_group)
 
-        # Get state space model C, D and E
-        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
-
-        # Size n_A of square matrix A
-        n_A = np.size(A, axis=0)
-
-        # Build F
-        F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
-
-        # Flag that's True if we have non zero D
-        have_D = len(np.nonzero(D)[0]) == 0
-
-        # Flag that's True if we have non zero E
-        have_E = len(np.nonzero(E)[0]) == 0
-
-        # Initialize Ct to C
-        Ct = C
-
         # Iterative compensation of passivity violations
         iteration = 0
         while iteration < max_iterations:
             logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
 
             # Get S
-            S = Ct @ F
-            if have_D:
-                S += D
-            if have_E:
-                S += s_eval[:, None, None] * E
+            S = Ct @ F + Dt
 
             # Singular value decomposition
             u, sigma, vh = np.linalg.svd(S, full_matrices=False)
@@ -3482,6 +3491,7 @@ class VectorFitting:
 
             # Solve C_viol for every response
             C_viol = np.empty((n_ports, n_ports, n_residues))
+            D_viol = np.empty((n_ports, n_ports))
             for i in range(n_ports):
                 for j in range(n_ports):
                     # Solve overdetermined least squares problem for Cviol
@@ -3499,22 +3509,35 @@ class VectorFitting:
                     b_ls = np.hstack((np.real(S_viol[:, i, j]), np.imag(S_viol[:, i, j])))
 
                     # Solve least squares
-                    C_viol[i, j], residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
+                    x, residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
+
+                    # Save C_viol and D_viol
+                    if have_D:
+                        C_viol[i, j] = x[:-1]
+                        D_viol[i, j] = x[-1] * D_norm
+                    else:
+                        C_viol[i, j] = x
 
             # Perturb residues
             Ct -= C_viol.reshape(n_ports, -1)
 
+            # Perturb constant
+            if have_D:
+                Dt -= D_viol
+
             # Increment iteration counter
             iteration += 1
+
+        if verbose:
+            print(f'Passivity enforcement converged in {iteration} iterations')
 
         # Warn if maximum number of iterations has been exceeded
         if iteration == max_iterations:
             warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
                           'exceeded.', RuntimeWarning, stacklevel=2)
 
-        # Update model residues
+        # Update residues
         residues=self.residues[idx_pole_group]
-
         for i in range(n_ports):
             idx_column_Ct = 0
             for j in range(n_ports):
@@ -3529,6 +3552,13 @@ class VectorFitting:
                         # Complex-conjugate residue
                         residues[idx_response, idx_residue] = Ct[i, idx_column_Ct] + 1j * Ct[i, idx_column_Ct + 1]
                         idx_column_Ct += 2
+
+        # Update constant
+        if have_D:
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    idx_response = i * n_ports + j
+                    self.constant[idx_pole_group][idx_response] = Dt[i, j]
 
     def write_npz(self, path: str) -> None:
         """
