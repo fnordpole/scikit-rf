@@ -1255,9 +1255,12 @@ class VectorFitting:
                 for j in range(n_ports):
                     print(f'Response ({i+1}, {j+1}): AbsErr={abs_err[i, j]:.4e} RelErr={rel_err[i, j]:.4e}')
 
-    def _get_n_ports(self):
+    def _get_n_ports(self, idx_pole_group = None):
         # Returns the number of ports derived from self.map_idx_response_to_idx_pole_group
-        n_ports = int(np.sqrt(len(self.map_idx_response_to_idx_pole_group)))
+        if idx_pole_group is None:
+            n_ports = int(np.sqrt(len(self.map_idx_response_to_idx_pole_group)))
+        else:
+            n_ports=int(np.sqrt(self._get_n_responses(idx_pole_group)))
 
         return n_ports
 
@@ -3178,8 +3181,9 @@ class VectorFitting:
                 omega_center = 0.5 * (omega_start + omega_stop)
 
             # Calculate singular values at the center frequency between crossover frequencies to identify violations
-            s_center = self._get_S_from_state_space_ABCDE(np.array([omega_center]), A, B, C, D, E)
-            sigma = np.linalg.svd(s_center[0], compute_uv=False)
+            S_center = self._get_S_from_state_space_ABCDE(np.array([omega_center]), A, B, C, D, E)
+
+            sigma = np.linalg.svd(S_center[0], compute_uv=False)
 
             # Check if all singular values are less than unity
             is_passive = len(np.nonzero(sigma[sigma > 1])[0]) == 0
@@ -3379,16 +3383,16 @@ class VectorFitting:
 
         # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
         # would happen if it's not dense enough.
-        #omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
-        omega_eval = 2 * np.pi * np.linspace(0.0001e12, 0.01e12, n_samples)
+        omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
+        #omega_eval = 2 * np.pi * np.linspace(0.0001e12, 0.01e12, n_samples)
         #omega_eval = np.insert(omega_eval, 0, [1, 5, 10, 100, 500, 1000, 1e4] )
         s_eval = 1j * omega_eval
 
         # Get state space model A and B for response 0. They are the same for every idx_response
-        A, B = self._get_state_space_AB(idx_pole_group, idx_response = 0)
+        A0, B0 = self._get_state_space_AB(idx_pole_group, idx_response = 0)
 
-        # Size n_A of square matrix A
-        n_A = np.size(A, axis=0)
+        # Size n_A0 of square matrix A0
+        n_A0 = np.size(A0, axis=0)
 
         # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
         # how this parameter influences the algorithm.
@@ -3402,128 +3406,129 @@ class VectorFitting:
         # Next, the multiplication with B does not need to be a matrix multiplication but can be done
         # in a simple element-wise multiplication because F is diagonal!
         # All of this saves a ton of memory because the sparse F matrix is never built and a ton of cpu.
-        F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
+        F0 = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A0)[None, :, :] - A0[None, :, :]) @ B0[None, :, :]
 
         # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
-        F_transpose = np.squeeze(F)
+        F0_transpose = np.squeeze(F0)
 
         # Build A_ls for the least squares problem A x = b
-        A_ls = np.vstack((np.real(F_transpose), np.imag(F_transpose)))
+        A_ls = np.vstack((np.real(F0_transpose), np.imag(F0_transpose)))
 
-        # Get the number of responses in the pole group
-        n_responses = self._get_n_responses(idx_pole_group)
+        # Get the number of ports in the pole group
+        n_ports = self._get_n_ports(idx_pole_group)
 
-        # Run passivity enforce for each response
-        for idx_response in range(n_responses):
-            logger.info(f'Starting passivity enforcement for response {idx_response+1} of {n_responses}')
+        # Get number of residues
+        n_residues = self.get_model_order(idx_pole_group)
 
-            # Get state space model C, D and E for current response
-            C, D, E = self._get_state_space_CDE(idx_pole_group, idx_response)
+        # Get state space model C, D and E
+        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
 
-            # Flag that's True if we have non zero D
-            have_D = D != 0
+        # Size n_A of square matrix A
+        n_A = np.size(A, axis=0)
 
-            # Flag that's True if we have non zero E
-            have_E = E != 0
+        # Build F
+        F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
 
-            # Initialize Ct to C
-            Ct = C
+        # Flag that's True if we have non zero D
+        have_D = len(np.nonzero(D)[0]) == 0
 
-            # Iterative compensation of passivity violations
-            iteration = 0
-            while iteration < max_iterations:
-                logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
+        # Flag that's True if we have non zero E
+        have_E = len(np.nonzero(E)[0]) == 0
 
-                # Get S
-                S = Ct @ F
-                if have_D:
-                    S += D
-                if have_E:
-                    S += s_eval[:, None, None] * E
+        # Initialize Ct to C
+        Ct = C
 
-                all_abs_S_less_than_unity = len(np.nonzero(np.abs(S) > 1)[0]) == 0
-                if all_abs_S_less_than_unity:
-                    print('OK\n')
-                else:
-                    print('NOK\n')
+        # Iterative compensation of passivity violations
+        iteration = 0
+        while iteration < max_iterations:
+            logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
 
-                # Singular value decomposition
-                u, sigma, vh = np.linalg.svd(S, full_matrices=False)
+            # Get S
+            S = Ct @ F
+            if have_D:
+                S += D
+            if have_E:
+                S += s_eval[:, None, None] * E
 
-                # Debug: Plot the frequency response of each singular value
-                import matplotlib.pyplot as plt
-                fig, ax = plt.subplots()
-                ax.grid()
-                for n in range(np.size(sigma, axis=1)):
-                    ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ index={idx_pole_group + 1}, idx={n + 1}')
-                ax.set_xlabel('Omega (rad)')
-                ax.set_ylabel('Magnitude')
-                ax.legend(loc='best')
-                plt.show()
+            # Singular value decomposition
+            u, sigma, vh = np.linalg.svd(S, full_matrices=False)
 
-                # Maximum singular value
-                sigma_max = np.max(sigma)
+            # Debug: Plot the frequency response of each singular value
+            # import matplotlib.pyplot as plt
+            # fig, ax = plt.subplots()
+            # ax.grid()
+            # for n in range(np.size(sigma, axis=1)):
+            #     ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ idx_pole_group={idx_pole_group + 1}, index={n + 1}')
+            # ax.set_xlabel('Frequency (rad)')
+            # ax.set_ylabel('Magnitude')
+            # ax.legend(loc='best')
+            # plt.show()
 
-                # Stop iterations if model is passive
-                if sigma_max <= 1.0:
-                    break
+            # Maximum singular value
+            sigma_max = np.max(sigma)
 
-                # Set all sigma that are <= delta to zero
-                sigma[sigma <= delta] = 0
+            # Stop iterations if model is passive
+            if sigma_max <= 1.0:
+                break
 
-                # Subtract delta from all sigma that are > delta
-                sigma[sigma > delta] -= delta
+            # Set all sigma that are <= delta to zero
+            sigma[sigma <= delta] = 0
 
-                # Calculate S_viol. Squeeze to remove n_freqs x 1 x 1 shape and get n_freqs vector
-                S_viol = np.squeeze((u * sigma[:, None, :]) @ vh)
+            # Subtract delta from all sigma that are > delta
+            sigma[sigma > delta] -= delta
 
-                # Solve overdetermined least squares problem for Cviol
+            # Calculate S_viol
+            S_viol = (u * sigma[:, None, :]) @ vh
 
-                # Solve S_viol = C_viol F for C_viol. This is a system of the form x A = b but
-                # because (AB)^T = B^T A^T, we can convert it into a system of form A x = b by transposing:
-                #
-                # Solve F^T C_viol^T = S_viol^T for C_viol^T
-                # C_viol is of shape 1 x n_poles and
-                # F is of shape n_poles x n_poles and
-                # S_viol is of shape 1 x 1, so S_viol^T == S_viol
-                # (of course in addition to that we have the outermost dimension for the frequency for all of them)
+            # Solve C_viol for every response
+            C_viol = np.empty((n_ports, n_ports, n_residues))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # Solve overdetermined least squares problem for Cviol
 
-                # Build b_ls for the least squares problem A x = b
-                b_ls = np.hstack((np.real(S_viol), np.imag(S_viol)))
+                    # Solve S_viol = C_viol F for C_viol. This is a system of the form x A = b but
+                    # because (AB)^T = B^T A^T, we can convert it into a system of form A x = b by transposing:
+                    #
+                    # Solve F^T C_viol^T = S_viol^T for C_viol^T
+                    # C_viol is of shape 1 x n_poles and
+                    # F is of shape n_poles x n_poles and
+                    # S_viol is of shape 1 x 1, so S_viol^T == S_viol
+                    # (of course in addition to that we have the outermost dimension for the frequency for all of them)
 
-                # Solve least squares
-                C_viol, residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
+                    # Build b_ls for the least squares problem A x = b
+                    b_ls = np.hstack((np.real(S_viol[:, i, j]), np.imag(S_viol[:, i, j])))
 
-                # Perturb residues by subtracting respective row and column in C_t. Squeeze 3x1 into 3 and subtract
-                # from previous Ct keeping its shape at 1x3. This is important because Ct will be used to calculate
-                # the new S so its shape must not be changed.
-                Ct -= np.squeeze(C_viol)
+                    # Solve least squares
+                    C_viol[i, j], residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
 
-                iteration += 1
+            # Perturb residues
+            Ct -= C_viol.reshape(n_ports, -1)
 
-            # Warn if maximum number of iterations has been exceeded
-            if iteration == max_iterations:
-                warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
-                              'exceeded.', RuntimeWarning, stacklevel=2)
+            # Increment iteration counter
+            iteration += 1
 
-            # Update model residues
-            residues=self.residues[idx_pole_group][idx_response]
+        # Warn if maximum number of iterations has been exceeded
+        if iteration == max_iterations:
+            warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
+                          'exceeded.', RuntimeWarning, stacklevel=2)
 
-            # Squeeze 1x3 into 3
-            Ct = np.squeeze(Ct)
+        # Update model residues
+        residues=self.residues[idx_pole_group]
 
-            idx_Ct = 0   # Column index in Ct
-            for idx_residue, residue in enumerate(residues):
-                if np.imag(residue) == 0.0:
-                    # Real residue
-                    residues[idx_residue] = Ct[idx_Ct]
-                    idx_Ct += 1
-                else:
-                    # Complex-conjugate residue
-                    residues[idx_residue] = Ct[idx_Ct] + 1j * Ct[idx_Ct + 1]
-                    idx_Ct += 2
+        for i in range(n_ports):
+            idx_column_Ct = 0
+            for j in range(n_ports):
+                idx_response = i * n_ports + j
 
-            logger.info(f'Finished passivity enforcement for response {idx_response+1} of {n_responses}')
+                for idx_residue, residue in enumerate(residues[idx_response]):
+                    if np.imag(residue) == 0.0:
+                        # Real residue
+                        residues[idx_response, idx_residue] = Ct[i, idx_column_Ct]
+                        idx_column_Ct += 1
+                    else:
+                        # Complex-conjugate residue
+                        residues[idx_response, idx_residue] = Ct[i, idx_column_Ct] + 1j * Ct[i, idx_column_Ct + 1]
+                        idx_column_Ct += 2
 
     def write_npz(self, path: str) -> None:
         """
