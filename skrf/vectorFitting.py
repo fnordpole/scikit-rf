@@ -2621,24 +2621,26 @@ class VectorFitting:
             n_matrix = n_poles_real + 2 * n_poles_complex
 
             # State-space matrix C holds the residues
-            # Assemble C = [R1.11, R1.12, R1.13, ...]
-            C = np.zeros(n_matrix)
+            # Assemble C = [[R1.11, R1.12, R1.13, ...]]
+            C = np.zeros(shape=(1, n_matrix))
 
             j_residues = 0
             for residue in residues[idx_response]:
                 if np.imag(residue) == 0.0:
-                    C[j_residues] = np.real(residue)
+                    C[0, j_residues] = np.real(residue)
                     j_residues += 1
                 else:
-                    C[j_residues] = np.real(residue)
-                    C[j_residues + 1] = np.imag(residue)
+                    C[0, j_residues] = np.real(residue)
+                    C[0, j_residues + 1] = np.imag(residue)
                     j_residues += 2
 
             # State-space matrix D holds the constant
-            D = constant[idx_response]
+            D = np.zeros(shape=(1, 1))
+            D[0, 0] = constant[idx_response]
 
             # State-space matrix E holds the proportional
-            E = proportional[idx_response]
+            E = np.zeros(shape=(1, 1))
+            E[0, 0] = proportional[idx_response]
 
         return C, D, E
 
@@ -2981,7 +2983,7 @@ class VectorFitting:
                 # Check if it is hamiltonian
                 if method.lower() == 'hamiltonian':
                     if verbose:
-                        print("Using full size hamiltonian passivity test because matrix is not symmetric")
+                        print("Requested full size hamiltonian passivity test even if matrix is symmetric")
                     return self._passivity_test_hamiltonian(idx_pole_group)
 
             # Otherwise use half size as default
@@ -3369,11 +3371,21 @@ class VectorFitting:
                 # Singular value decomposition
                 u, sigma, vh = np.linalg.svd(S, full_matrices=False)
 
+                # Debug: Plot the frequency response of each singular value
+                # import matplotlib.pyplot as plt
+                # fig, ax = plt.subplots()
+                # ax.grid()
+                # for n in range(len(sigma)):
+                #     ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ index={idx_pole_group + 1}, idx={n + 1}')
+                # ax.set_xlabel('Omega (rad)')
+                # ax.set_ylabel('Magnitude')
+                # ax.legend(loc='best')
+
                 # Maximum singular value
                 sigma_max = np.max(sigma)
 
                 # Stop iterations if model is passive
-                if sigma_max < 1.0:
+                if sigma_max <= 1.0:
                     break
 
                 # Set all sigma that are <= delta to zero
@@ -3382,8 +3394,8 @@ class VectorFitting:
                 # Subtract delta from all sigma that are > delta
                 sigma[sigma > delta] -= delta
 
-                # Calculate S_viol
-                S_viol = (u * sigma) @ vh
+                # Calculate S_viol. Squeeze to remove n_freqs x 1 x 1 shape and get n_freqs vector
+                S_viol = np.squeeze((u * sigma[:, None, :]) @ vh)
 
                 # Solve overdetermined least squares problem for Cviol
 
@@ -3397,12 +3409,14 @@ class VectorFitting:
                 # (of course in addition to that we have the outermost dimension for the frequency for all of them)
 
                 # Build b_ls for the least squares problem A x = b
-                b_ls = np.vstack((np.real(S_viol), np.imag(S_viol)))
+                b_ls = np.hstack((np.real(S_viol), np.imag(S_viol)))
 
                 # Solve least squares
                 C_viol, residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
 
-                # Perturb residues by subtracting respective row and column in C_t
+                # Perturb residues by subtracting respective row and column in C_t. Squeeze 3x1 into 3 and subtract
+                # from previous Ct keeping its shape at 1x3. This is important because Ct will be used to calculate
+                # the new S so its shape must not be changed.
                 Ct -= np.squeeze(C_viol)
 
                 iteration += 1
@@ -3414,6 +3428,9 @@ class VectorFitting:
 
             # Update model residues
             residues=self.residues[idx_pole_group][idx_response]
+
+            # Squeeze 1x3 into 3
+            Ct = np.squeeze(Ct)
 
             idx_Ct = 0   # Column index in Ct
             for idx_residue, residue in enumerate(residues):
