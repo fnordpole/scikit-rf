@@ -2398,7 +2398,7 @@ class VectorFitting:
 
         return error
 
-    def _get_ABCDE(self, idx_pole_group
+    def _get_state_space_ABCDE(self, idx_pole_group
                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Private method.
@@ -2827,12 +2827,12 @@ class VectorFitting:
         return A, B
 
     @staticmethod
-    def _get_s_from_ABCDE(omega: np.ndarray,
+    def _get_S_from_state_space_ABCDE(omega: np.ndarray,
                           A: np.ndarray, B: np.ndarray, C: np.ndarray, D: np.ndarray, E: np.ndarray) -> np.ndarray:
         """
         Private method.
         Returns the S-matrix of the vector fitted model calculated from the real-valued system matrices of the state-
-        space representation, as provided by `_get_ABCDE()`.
+        space representation, as provided by `_get_state_space_ABCDE()`.
 
         Parameters
         ----------
@@ -2998,7 +2998,7 @@ class VectorFitting:
         # The operator @ is the same as numpy.matmul()
 
         # Get state-space matrices
-        A, B, C, D, E = self._get_ABCDE(idx_pole_group)
+        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
 
         n_ports = np.shape(D)[0]
 
@@ -3051,7 +3051,7 @@ class VectorFitting:
         # The operator @ is the same as numpy.matmul()
 
         # Get state-space matrices
-        A, B, C, D, E = self._get_ABCDE(idx_pole_group)
+        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
 
         n_ports = np.shape(D)[0]
 
@@ -3107,7 +3107,7 @@ class VectorFitting:
                 omega_center = 0.5 * (omega_start + omega_stop)
 
             # Calculate singular values at the center frequency between crossover frequencies to identify violations
-            s_center = self._get_s_from_ABCDE(np.array([omega_center]), A, B, C, D, E)
+            s_center = self._get_S_from_state_space_ABCDE(np.array([omega_center]), A, B, C, D, E)
             sigma = np.linalg.svd(s_center[0], compute_uv=False)
 
             # Check if all singular values are less than unity
@@ -3308,7 +3308,9 @@ class VectorFitting:
 
         # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
         # would happen if it's not dense enough.
-        omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
+        #omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
+        omega_eval = 2 * np.pi * np.linspace(0.0001e12, 0.01e12, n_samples)
+        #omega_eval = np.insert(omega_eval, 0, [1, 5, 10, 100, 500, 1000, 1e4] )
         s_eval = 1j * omega_eval
 
         # Get state space model A and B for response 0. They are the same for every idx_response
@@ -3368,18 +3370,25 @@ class VectorFitting:
                 if have_E:
                     S += s_eval[:, None, None] * E
 
+                all_abs_S_less_than_unity = len(np.nonzero(np.abs(S) > 1)[0]) == 0
+                if all_abs_S_less_than_unity:
+                    print('OK\n')
+                else:
+                    print('NOK\n')
+
                 # Singular value decomposition
                 u, sigma, vh = np.linalg.svd(S, full_matrices=False)
 
                 # Debug: Plot the frequency response of each singular value
-                # import matplotlib.pyplot as plt
-                # fig, ax = plt.subplots()
-                # ax.grid()
-                # for n in range(len(sigma)):
-                #     ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ index={idx_pole_group + 1}, idx={n + 1}')
-                # ax.set_xlabel('Omega (rad)')
-                # ax.set_ylabel('Magnitude')
-                # ax.legend(loc='best')
+                import matplotlib.pyplot as plt
+                fig, ax = plt.subplots()
+                ax.grid()
+                for n in range(np.size(sigma, axis=1)):
+                    ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ index={idx_pole_group + 1}, idx={n + 1}')
+                ax.set_xlabel('Omega (rad)')
+                ax.set_ylabel('Magnitude')
+                ax.legend(loc='best')
+                plt.show()
 
                 # Maximum singular value
                 sigma_max = np.max(sigma)
@@ -4097,14 +4106,14 @@ class VectorFitting:
 
         for idx_pole_group in pole_group_indices:
             # Get system matrices of state-space representation
-            A, B, C, D, E = self._get_ABCDE(idx_pole_group)
+            A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
 
             # Reset n_ports according to shape of D because depending on the pole group we can have a varying number
             # of responses / sub-ports
             n_ports = np.shape(D)[0]
 
             # Calculate singular values for each frequency
-            u, sigma, vh = np.linalg.svd(self._get_s_from_ABCDE(omega, A, B, C, D, E))
+            u, sigma, vh = np.linalg.svd(self._get_S_from_state_space_ABCDE(omega, A, B, C, D, E))
 
             # Plot the frequency response of each singular value
             for n in range(n_ports):
