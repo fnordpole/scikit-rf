@@ -2917,6 +2917,7 @@ class VectorFitting:
         verbose: bool = False,
         method = None,
         idx_response = None,
+        reltol_hamiltonian = 1e-3,
         ):
         """
         Evaluates the passivity of reciprocal vector fitted models by means of a half-size test matrix [#]_. Any
@@ -2980,14 +2981,21 @@ class VectorFitting:
             violation_bands=[]
             n_pole_groups=len(self.poles)
             for idx_pole_group in range(n_pole_groups):
-                violation_bands.append(self._passivity_test(idx_pole_group, verbose, method, idx_response))
+                violation_bands.append(
+                    self._passivity_test(idx_pole_group, verbose, method, idx_response, reltol_hamiltonian))
         else:
             # Return only the violation bands for the specified pole group
-            violation_bands=self._passivity_test(idx_pole_group, verbose, method, idx_response)
+            violation_bands=self._passivity_test(idx_pole_group, verbose, method, idx_response, reltol_hamiltonian)
 
         return violation_bands
 
-    def _passivity_test(self, idx_pole_group, verbose = False, method = None, idx_response = None) -> np.ndarray:
+    def _passivity_test(self,
+        idx_pole_group,
+        verbose = False,
+        method = None,
+        idx_response = None,
+        reltol_hamiltonian = 1e-3,
+        ) -> np.ndarray:
         # Runs either the half size or hamiltonian passivity test, depending on symmetry.
         # Description of arguments see passivity_test
         #
@@ -3037,7 +3045,7 @@ class VectorFitting:
             # If not symmetric we always use the hamiltonian test regardless of method requested
             if verbose:
                 print("Using full size hamiltonian passivity test because matrix is not symmetric")
-            return self._passivity_test_hamiltonian(idx_pole_group, idx_response)
+            return self._passivity_test_hamiltonian(idx_pole_group, idx_response, reltol_hamiltonian)
         else:
             # If symmetric, we use half-size by default but we use hamiltonian if requested via method
 
@@ -3047,7 +3055,7 @@ class VectorFitting:
                 if method.lower() == 'hamiltonian':
                     if verbose:
                         print("Requested full size hamiltonian passivity test even if matrix is symmetric")
-                    return self._passivity_test_hamiltonian(idx_pole_group, idx_response)
+                    return self._passivity_test_hamiltonian(idx_pole_group, idx_response, reltol_hamiltonian)
 
             # Otherwise use half size as default
             if verbose:
