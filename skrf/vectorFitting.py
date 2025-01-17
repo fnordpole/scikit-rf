@@ -10,8 +10,6 @@ import numpy as np
 from scipy import integrate
 from scipy.signal import find_peaks
 from scipy.linalg import issymmetric
-from numpy.linalg import inv
-from numpy import identity, transpose
 
 from .util import Axes, axes_kwarg
 
@@ -1168,6 +1166,14 @@ class VectorFitting:
                 all_proportional_are_zero=False
                 break
         return all_proportional_are_zero
+
+    def _get_n_responses(self, idx_pole_group = None) -> int:
+        # Returns the number of responses
+
+        if idx_pole_group is None:
+            return len(self.map_idx_response_to_idx_pole_group)
+        else:
+            return np.size(self.residues[idx_pole_group], axis = 0)
 
     def get_n_poles_complex(self, idx_pole_group = None) -> int:
         # Returns the number of complex poles
@@ -2463,12 +2469,12 @@ class VectorFitting:
         for j in range(n_ports):
             for pole in poles:
                 if np.imag(pole) == 0.0:
-                    # adding a real pole
+                    # Real pole
                     A[i_A, i_A] = np.real(pole)
                     B[i_A, j] = 1
                     i_A += 1
                 else:
-                    # adding a complex-conjugate pole
+                    # Complex-conjugate pole
                     A[i_A, i_A] = np.real(pole)
                     A[i_A, i_A + 1] = np.imag(pole)
                     A[i_A + 1, i_A] = -1 * np.imag(pole)
@@ -2516,6 +2522,308 @@ class VectorFitting:
 
         return A, B, C, D, E
 
+    def _get_state_space_CDE(self, idx_pole_group, idx_response = None,
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Private method.
+        Returns the real-valued system matrices of the state-space representation of the current rational model, as
+        defined in [#]_.
+
+        Returns
+        -------
+        C : ndarray
+            State-space matrix C holding the residues
+        D : ndarray
+            State-space matrix D holding the constants
+        E : ndarray
+            State-space matrix E holding the proportional coefficients
+
+        Raises
+        ------
+        ValueError
+            If the model parameters have not been initialized (by running :func:`vector_fit()` or :func:`read_npz()`).
+
+        References
+        ----------
+        .. [#] B. Gustavsen and A. Semlyen, "Fast Passivity Assessment for S-Parameter Rational Models Via a Half-Size
+            Test Matrix," in IEEE Transactions on Microwave Theory and Techniques, vol. 56, no. 12, pp. 2701-2708,
+            Dec. 2008, DOI: 10.1109/TMTT.2008.2007319.
+        """
+
+        # Initial checks
+        if self.poles is None:
+            raise ValueError('poles = None; nothing to do. You need to run vector_fit() first.')
+        if self.residues is None:
+            raise ValueError('self.residues = None; nothing to do. You need to run vector_fit() first.')
+        if self.proportional is None:
+            raise ValueError('self.proportional = None; nothing to do. You need to run vector_fit() first.')
+        if self.constant is None:
+            raise ValueError('self.constant = None; nothing to do. You need to run vector_fit() first.')
+
+        # Assemble real-valued state-space matrices C, D, E from fitted complex-valued pole-residue model
+
+        # Get data
+        poles=self.poles[idx_pole_group]
+        residues=self.residues[idx_pole_group]
+        constant=self.constant[idx_pole_group]
+        proportional=self.proportional[idx_pole_group]
+
+        n_poles_real = np.sum(poles.imag == 0)
+        n_poles_complex = np.sum(poles.imag != 0)
+
+        if idx_response is None:
+            # Build C, D and E for all responses in of the pole group
+
+            # Determine size of the matrix system. Note: This is the n_ports inside of
+            # the pole group and not the n_ports of the entire network!
+            n_ports = int(np.sqrt(np.shape(residues)[0]))
+            n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
+
+            # State-space matrix C holds the residues
+            # Assemble C = [[R1.11, R1.12, R1.13, ...], [R2.11, R2.12, R2.13, ...], ...]
+            C = np.zeros(shape=(n_ports, n_matrix))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # i: row index
+                    # j: column index
+                    i_response = i * n_ports + j
+                    j_residues = 0
+                    for residue in residues[i_response]:
+                        if np.imag(residue) == 0.0:
+                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
+                            j_residues += 1
+                        else:
+                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
+                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues + 1] = np.imag(residue)
+                            j_residues += 2
+
+            # State-space matrix D holds the constants
+            # Assemble D = [[d11, d12, ...], [d21, d22, ...], ...]
+            D = np.zeros(shape=(n_ports, n_ports))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # i: row index
+                    # j: column index
+                    i_response = i * n_ports + j
+                    D[i, j] = constant[i_response]
+
+            # Etate-space matrix E holds the proportional coefficients (usually 0 in case of fitted S-parameters)
+            # Assemble E = [[e11, e12, ...], [e21, e22, ...], ...]
+            E = np.zeros(shape=(n_ports, n_ports))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # i: row index
+                    # j: column index
+                    i_response = i * n_ports + j
+                    E[i, j] = proportional[i_response]
+        else:
+            # Build C, D and E for only the specified response
+            n_matrix = n_poles_real + 2 * n_poles_complex
+
+            # State-space matrix C holds the residues
+            # Assemble C = [R1.11, R1.12, R1.13, ...]
+            C = np.zeros(n_matrix)
+
+            j_residues = 0
+            for residue in residues[idx_response]:
+                if np.imag(residue) == 0.0:
+                    C[j_residues] = np.real(residue)
+                    j_residues += 1
+                else:
+                    C[j_residues] = np.real(residue)
+                    C[j_residues + 1] = np.imag(residue)
+                    j_residues += 2
+
+            # State-space matrix D holds the constant
+            D = constant[idx_response]
+
+            # State-space matrix E holds the proportional
+            E = proportional[idx_response]
+
+        return C, D, E
+
+    def _get_state_space_AB(self, idx_pole_group, idx_response = None,
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Private method.
+        Returns the real-valued system matrices of the state-space representation of the current rational model, as
+        defined in [#]_.
+
+        Returns
+        -------
+        A : ndarray
+            State-space matrix A holding the poles on the diagonal as real values with imaginary parts on the sub-
+            diagonal
+        B : ndarray
+            State-space matrix B holding coefficients (1, 2, or 0), depending on the respective type of pole in A
+
+        Raises
+        ------
+        ValueError
+            If the model parameters have not been initialized (by running :func:`vector_fit()` or :func:`read_npz()`).
+
+        References
+        ----------
+        .. [#] B. Gustavsen and A. Semlyen, "Fast Passivity Assessment for S-Parameter Rational Models Via a Half-Size
+            Test Matrix," in IEEE Transactions on Microwave Theory and Techniques, vol. 56, no. 12, pp. 2701-2708,
+            Dec. 2008, DOI: 10.1109/TMTT.2008.2007319.
+        """
+
+        # Initial checks
+        if self.poles is None:
+            raise ValueError('poles = None; nothing to do. You need to run vector_fit() first.')
+        if self.residues is None:
+            raise ValueError('self.residues = None; nothing to do. You need to run vector_fit() first.')
+        if self.proportional is None:
+            raise ValueError('self.proportional = None; nothing to do. You need to run vector_fit() first.')
+        if self.constant is None:
+            raise ValueError('self.constant = None; nothing to do. You need to run vector_fit() first.')
+
+        # Assemble real-valued state-space matrices A, B from fitted complex-valued pole-residue model
+
+        # Get data
+        poles=self.poles[idx_pole_group]
+        residues=self.residues[idx_pole_group]
+
+        n_poles_real = np.sum(poles.imag == 0)
+        n_poles_complex = np.sum(poles.imag != 0)
+
+        if idx_response is None:
+            # Build A and B for all responses in of the pole group
+
+            # Determine size of the matrix system. Note: This is the n_ports inside of
+            # the pole group and not the n_ports of the entire network!
+            n_ports = int(np.sqrt(np.shape(residues)[0]))
+            n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
+
+            # State-space matrix A holds the poles on the diagonal as real values with imaginary parts on the sub-diagonal
+            # State-space matrix B holds coefficients (1, 2, or 0), depending on the respective type of pole in A
+            # Assemble A = [[poles_real,   0,                  0],
+            #               [0,            real(poles_complex),   imag(poles_complex],
+            #               [0,            -imag(poles_complex),  real(poles_complex]]
+            A = np.identity(n_matrix)
+            B = np.zeros(shape=(n_matrix, n_ports))
+            i_A = 0  # index on diagonal of A
+            for j in range(n_ports):
+                for pole in poles:
+                    if np.imag(pole) == 0.0:
+                        # Real pole
+                        A[i_A, i_A] = np.real(pole)
+                        B[i_A, j] = 1
+                        i_A += 1
+                    else:
+                        # Complex-conjugate pole
+                        A[i_A, i_A] = np.real(pole)
+                        A[i_A, i_A + 1] = np.imag(pole)
+                        A[i_A + 1, i_A] = -1 * np.imag(pole)
+                        A[i_A + 1, i_A + 1] = np.real(pole)
+                        B[i_A, j] = 2
+                        i_A += 2
+
+        else:
+            # Build A and B only for the specified response
+            n_matrix = (n_poles_real + 2 * n_poles_complex)
+
+            # State-space matrix A holds the poles on the diagonal as real values with imaginary parts
+            # on the sub-diagonal. State-space matrix B holds coefficients (1, 2, or 0), depending
+            # on the respective type of pole in A
+
+            # Assemble A = [[poles_real,   0,                  0],
+            #               [0,            real(poles_complex),   imag(poles_complex],
+            #               [0,            -imag(poles_complex),  real(poles_complex]]
+            A = np.identity(n_matrix)
+            B = np.zeros(shape=(n_matrix, 1))
+            i_A = 0  # index on diagonal of A
+            for pole in poles:
+                if np.imag(pole) == 0.0:
+                    # Real pole
+                    A[i_A, i_A] = np.real(pole)
+                    B[i_A, 0] = 1
+                    i_A += 1
+                else:
+                    # Complex-conjugate pole
+                    A[i_A, i_A] = np.real(pole)
+                    A[i_A, i_A + 1] = np.imag(pole)
+                    A[i_A + 1, i_A] = -1 * np.imag(pole)
+                    A[i_A + 1, i_A + 1] = np.real(pole)
+                    B[i_A, 0] = 2
+                    i_A += 2
+
+        return A, B
+
+
+    def _get_state_space_AB_complex(self, idx_pole_group
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Private method.
+        Returns the complex-valued system matrix A of the state-space representation of the rational model, as
+        defined in [#]_.
+
+        Returns
+        -------
+        A : ndarray
+            State-space matrix A holding the poles on the diagonal
+
+        Raises
+        ------
+        ValueError
+            If the model parameters have not been initialized (by running :func:`vector_fit()` or :func:`read_npz()`).
+
+        References
+        ----------
+        .. [#] B. Gustavsen and A. Semlyen, "Fast Passivity Assessment for S-Parameter Rational Models Via a Half-Size
+            Test Matrix," in IEEE Transactions on Microwave Theory and Techniques, vol. 56, no. 12, pp. 2701-2708,
+            Dec. 2008, DOI: 10.1109/TMTT.2008.2007319.
+        """
+
+        # Initial checks
+        if self.poles is None:
+            raise ValueError('poles = None; nothing to do. You need to run vector_fit() first.')
+        if self.residues is None:
+            raise ValueError('self.residues = None; nothing to do. You need to run vector_fit() first.')
+        if self.proportional is None:
+            raise ValueError('self.proportional = None; nothing to do. You need to run vector_fit() first.')
+        if self.constant is None:
+            raise ValueError('self.constant = None; nothing to do. You need to run vector_fit() first.')
+
+        # Assemble real-valued state-space matrices A, B, C, D, E from fitted complex-valued pole-residue model
+
+        # Get data
+        poles=self.poles[idx_pole_group]
+        residues=self.residues[idx_pole_group]
+
+        # Determine size of the matrix system. Note: This is the n_ports inside of
+        # the pole group and not the n_ports of the entire network!
+        n_ports = int(np.sqrt(np.shape(residues)[0]))
+
+        n_poles_real = np.sum(poles.imag == 0)
+        n_poles_complex = np.sum(poles.imag != 0)
+
+        n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
+
+        # State-space matrix A holds the poles on the diagonal
+        # Assemble A = [[pole_real,   0,                  0],
+        #               [0,           pole_complex,   0],
+        #               [0,           0,              pole_complex*]
+        A = np.identity(n_matrix)
+        B = np.zeros(shape=(n_matrix, n_ports))
+        i_A = 0  # index on diagonal of A
+        for j in range(n_ports):
+            for pole in poles:
+                if np.imag(pole) == 0.0:
+                    # Real pole
+                    A[i_A, i_A] = np.real(pole)
+                    B[i_A, j] = 1
+                    i_A += 1
+                else:
+                    # Complex-conjugate pole
+                    A[i_A, i_A] = pole
+                    A[i_A + 1, i_A + 1] = np.conj(pole)
+                    B[i_A, j] = 1
+                    B[i_A, j + 1] = 1
+                    i_A += 2
+        return A, B
+
     @staticmethod
     def _get_s_from_ABCDE(omega: np.ndarray,
                           A: np.ndarray, B: np.ndarray, C: np.ndarray, D: np.ndarray, E: np.ndarray) -> np.ndarray:
@@ -2541,6 +2849,7 @@ class VectorFitting:
         """
         s = 1j * omega
         dim_A = np.shape(A)[0]
+        # Improve! Explicit inversion slow and singularity problems! Not required. Matrix is block diag!!
         stsp_poles = np.linalg.inv(s[:, None, None] * np.identity(dim_A)[None, :, :] - A[None, :, :])
         stsp_S = np.matmul(np.matmul(C, stsp_poles), B)
         stsp_S += D + s[:, None, None] * E
@@ -2694,12 +3003,12 @@ class VectorFitting:
         # Build hamiltonian matrix M.
         # As defined in equation 8 in "Fast Passivity Assessment for S -Parameter Rational Models Via
         # a Half-Size Test Matrix", Bjørn Gustavsen and Adam Semlyen, 2008
-        R_roof_inv = inv(transpose(D) @ D) - identity(n_ports)
-        S_roof_inv = inv(D @ transpose(D)) - identity(n_ports)
-        M11 = A - B @ R_roof_inv @ transpose(D) @ C
-        M12 = -1 * B @ R_roof_inv @ transpose(B)
-        M21 = transpose(C) @ S_roof_inv @ C
-        M22 = -1 * transpose(A) + transpose(C) @ D @ R_roof_inv @ transpose(B)
+        R_roof_inv = np.linalg.inv(np.transpose(D) @ D - np.identity(n_ports))
+        S_roof_inv = np.linalg.inv(D @ np.transpose(D) - np.identity(n_ports))
+        M11 = A - B @ R_roof_inv @ np.transpose(D) @ C
+        M12 = -1 * B @ R_roof_inv @ np.transpose(B)
+        M21 = np.transpose(C) @ S_roof_inv @ C
+        M22 = -1 * np.transpose(A) + np.transpose(C) @ D @ R_roof_inv @ np.transpose(B)
         M = np.block([[M11, M12], [M21, M22]])
 
         # Calculate eigenvalues of M
@@ -2745,16 +3054,15 @@ class VectorFitting:
         n_ports = np.shape(D)[0]
 
         # Build half-size test matrix P from state-space matrices A, B, C, D
-        inv_neg = inv(D - identity(n_ports))
-        inv_pos = inv(D + identity(n_ports))
+        inv_neg = np.linalg.inv(D - np.identity(n_ports))
+        inv_pos = np.linalg.inv(D + np.identity(n_ports))
         P = (A - B @ inv_neg @ C) @ (A - B @ inv_pos @ C)
 
         # Extract eigenvalues of P
         P_eigs = np.linalg.eigvals(P)
 
         # Purely imaginary square roots of eigenvalues identify frequencies (2*pi*f) of borders of passivity violations
-        # Note: np.sqrt can't handle negative arguments. Need to use np.emath.sqrt for this code to work.
-        P_eigs_sqrt = np.emath.sqrt(P_eigs)
+        P_eigs_sqrt = np.sqrt(P_eigs)
 
         # Keep only those eigvals of P with a zero real part
         P_eigs_sqrt = P_eigs_sqrt[np.real(P_eigs_sqrt) == 0]
@@ -2805,7 +3113,7 @@ class VectorFitting:
 
             if not is_passive:
                 # Add this band to the list of passivity violations
-                violation_bands.append([omega_start / (2 * np.pi), omega_stop / (2 * np.pi)])
+                violation_bands.append([omega_start, omega_stop])
 
         return np.array(violation_bands)
 
@@ -2857,7 +3165,7 @@ class VectorFitting:
 
     def passivity_enforce(self,
                           n_samples: int = 200,
-                          f_max: float = None,
+                          maximum_frequency_of_interest: float = None,
                           parameter_type: str = 's',
                           max_iterations: int = 100,
                           verbose = None,
@@ -2872,7 +3180,7 @@ class VectorFitting:
             Number of linearly spaced frequency samples at which passivity will be evaluated and enforced.
             (Default: 100)
 
-        f_max : float or None, optional
+        maximum_frequency_of_interest : float or None, optional
             Highest frequency of interest for the passivity enforcement (in Hz, not rad/s). This limit usually
             equals the highest sample frequency of the fitted Network. If None, the highest frequency in
             :attr:`self.network` is used, which must not be None is this case. If `f_max` is not None, it overrides the
@@ -2922,7 +3230,8 @@ class VectorFitting:
 
         for idx_pole_group in range(n_pole_groups):
             logger.info(f'Starting passivity enforcement for pole group {idx_pole_group + 1} of {n_pole_groups}')
-            self._passivity_enforce(idx_pole_group, n_samples, f_max, parameter_type, max_iterations)
+            self._passivity_enforce(idx_pole_group, n_samples,
+                                    maximum_frequency_of_interest, parameter_type, max_iterations)
             logger.info(f'Finished passivity enforcement for pole group {idx_pole_group + 1} of {n_pole_groups}')
 
         # Print model summary
@@ -2937,7 +3246,11 @@ class VectorFitting:
                           '(parameter `n_samples`).', RuntimeWarning, stacklevel=2)
 
     def _passivity_enforce(self, idx_pole_group,
-                           n_samples, f_max, parameter_type, max_iterations) -> None:
+        n_samples,
+        maximum_frequency_of_interest,
+        parameter_type,
+        max_iterations,
+        ) -> None:
         # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
 
         if parameter_type.lower() != 's':
@@ -2953,160 +3266,161 @@ class VectorFitting:
             logger.info('Passivity enforcement: The model is already passive. Nothing to do.')
             return
 
-        # Find the highest relevant frequency; either
-        # 1) the highest frequency of passivity violation (f_viol_max)
-        # or
-        # 2) the highest fitting frequency (f_samples_max)
+        # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
+        # This highest relevant frequency is the maximum of the highest crossing from a nonpassive to a passive region
+        # on one hand and the maximum frequency of interest on the other hand [1]
+
+        # Get violation bands
         violation_bands = self.passivity_test(idx_pole_group, parameter_type)
-        f_viol_max = violation_bands[-1, 1]
 
-        if f_max is None:
-            if self.network is None:
-                raise RuntimeError('Both `self.network` and parameter `f_max` are None. One of them is required to '
-                                   'specify the frequency band of interest for the passivity enforcement.')
-            else:
-                f_samples_max = self.network.f[-1]
-        else:
-            f_samples_max = f_max
+        # Get highest crossing from a nonpassive to a passive region
+        omega_highest_crossing = violation_bands[-1, 1]
 
-        # Deal with unbounded violation interval (f_viol_max == np.inf)
-        if np.isinf(f_viol_max):
-            f_viol_max = 1.5 * violation_bands[-1, 0]
+        # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
+        if np.isinf(omega_highest_crossing):
+            # The paper doesn't specify what to do in this case. It i set to 1.5 omega_start for now
+            # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
+            # to a passive region as specified in the paper.
+            omega_highest_crossing = 1.5 * violation_bands[-1, 0]
             warnings.warn(
                 'Passivity enforcement: The passivity violations of this model are unbounded. '
                 'Passivity enforcement might still work, but consider re-fitting with a lower number of poles '
                 'and/or without the constants (`fit_constant=False`) if the results are not satisfactory.',
                 UserWarning, stacklevel=2)
 
-        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
-        if f_viol_max < f_samples_max:
-            f_eval_max = 1.2 * f_samples_max
-        else:
-            f_eval_max = 1.2 * f_viol_max
-        freqs_eval = np.linspace(0, f_eval_max, n_samples)
-        omega_eval = 2 * np.pi * freqs_eval
-
-        A, B, C, D, E = self._get_ABCDE(idx_pole_group)
-        dim_A = np.shape(A)[0]
-        C_t = C
-
-        # Only include constant if it has been fitted (not zero)
-        if len(np.nonzero(D)[0]) == 0:
-            D_t = None
-        else:
-            D_t = D
-
-        if self.network is not None:
-            # Find highest singular value among all frequencies and responses to use as target for the perturbation
-            # singular value decomposition
-            sigma = np.linalg.svd(self.network.s, compute_uv=False)
-            delta = np.amax(sigma)
-            if delta > 0.999:
-                delta = 0.999
-        else:
-            delta = 0.999  # predefined tolerance parameter (users should not need to change this)
-
-        # Calculate coefficient matrix
-        A_freq = np.linalg.inv(2j * np.pi * freqs_eval[:, None, None] * np.identity(dim_A)[None, :, :] - A[None, :, :])
-
-        # Construct coefficient matrix with an extra column for the constants (if present)
-        if D_t is not None:
-            coeffs = np.empty((len(freqs_eval), np.shape(B)[0] + 1, np.shape(B)[1]), dtype=complex)
-            coeffs[:, :-1, :] = np.matmul(A_freq, B[None, :, :])
-            coeffs[:, -1, :] = 1
-        else:
-            coeffs = np.matmul(A_freq, B[None, :, :])
-
-        # Iterative compensation of passivity violations
-        t = 0
-        self.history_max_sigma = []
-        while t < max_iterations:
-            logger.info(f'Passivity enforcement; Iteration {t + 1}')
-
-            # calculate S-matrix at this frequency (shape fxNxN)
-            if D_t is not None:
-                s_eval = self._get_s_from_ABCDE(omega_eval, A, B, C_t, D_t, E)
+        # Check if maximum_frequency_of_interest is specified
+        if maximum_frequency_of_interest is None:
+            # Check if we have a netwoork
+            if self.network is None:
+                raise RuntimeError('Both `self.network` and parameter `maximum_frequency_of_interest` are None. One of them is required to '
+                                   'specify the frequency band of interest for the passivity enforcement.')
             else:
-                s_eval = self._get_s_from_ABCDE(omega_eval, A, B, C_t, D, E)
+                # Set maximum_frequency_of_interest to highest frequency of network
+                maximum_frequency_of_interest = self.network.f[-1]
 
-            # Singular value decomposition
-            u, sigma, vh = np.linalg.svd(s_eval, full_matrices=False)
+        # Calculate omega
+        maximum_omega_of_interest = 2 * np.pi * maximum_frequency_of_interest
 
-            # Keep track of the greatest singular value in every iteration step
-            sigma_max = np.amax(sigma)
+        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
+        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
 
-            # Find and perturb singular values that cause passivity violations
-            idx_viol = np.nonzero(sigma > delta)
-            sigma_viol = np.zeros_like(sigma)
-            sigma_viol[idx_viol] = sigma[idx_viol] - delta
+        # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
+        # would happen if it's not dense enough.
+        omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
+        s_eval = 1j * omega_eval
 
-            # Construct a stack of diagonal matrices with the perturbed singular values on the diagonal
-            sigma_viol_diag = np.zeros_like(u, dtype=float)
-            idx_diag = np.arange(np.shape(sigma)[1])
-            sigma_viol_diag[:, idx_diag, idx_diag] = sigma_viol
+        # Get state space model A and B for response 0. They are the same for every idx_response
+        A, B = self._get_state_space_AB(idx_pole_group, idx_response = 0)
 
-            # Calculate violation S-responses
-            s_viol = np.matmul(np.matmul(u, sigma_viol_diag), vh)
+        # Size n_A of square matrix A
+        n_A = np.size(A, axis=0)
 
-            # Fit perturbed residues C_t for each response S_{i,j}
-            for i in range(np.shape(s_viol)[1]):
-                for j in range(np.shape(s_viol)[2]):
-                    # Mind the transpose of the system to compensate for the exchanged order of matrix multiplication:
-                    # Want to solve S = C_t * coeffs
-                    # but actually solving S = coeffs * C_t
-                    # S = C_t * coeffs <==> transpose(S) = transpose(coeffs) * transpose(C_t)
+        # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
+        # how this parameter influences the algorithm.
+        delta = 0.999
 
-                    # Solve least squares (real-valued)
-                    x, residuals, rank, singular_values = np.linalg.lstsq(np.vstack((np.real(coeffs[:, :, i]),
-                                                                                   np.imag(coeffs[:, :, i]))),
-                                                                        np.hstack((np.real(s_viol[:, j, i]),
-                                                                                   np.imag(s_viol[:, j, i]))),
-                                                                        rcond=None)
+        # Build matrix F = (sI - A)^-1 B
+        # Multiple things can be improved a lot in the calculation of F.
+        # The inversion is computationally fast because it is a complex diagonal matrix
+        # We can directly operate on 1x1 or 2x2 (complex) blocks of the block-diagonal matrix A
+        # Next, the inverse matrix can directly be calculated from the block-diagonal elements via 1/x
+        # Next, the multiplication with B does not need to be a matrix multiplication but can be done
+        # in a simple element-wise multiplication because F is diagonal!
+        # All of this saves a ton of memory because the sparse F matrix is never built and a ton of cpu.
+        F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
+        F_transpose = np.transpose(F)
 
-                    # Perturb residues by subtracting respective row and column in C_t
-                    # one half of the solution will always be 0 due to construction of A and B
-                    # also perturb constants (if present)
-                    if D_t is not None:
-                        C_t[j, :] = C_t[j, :] - x[:-1]
-                        D_t[j, i] = D_t[j, i] - x[-1]
-                    else:
-                        C_t[j, :] = C_t[j, :] - x
+        # Get the number of responses in the pole group
+        n_responses = self._get_n_responses(idx_pole_group)
 
-            t += 1
-            self.history_max_sigma.append(sigma_max)
+        # Run passivity enforce for each response
+        for idx_response in range(n_responses):
+            logger.info(f'Starting passivity enforcement for response {idx_response+1} of {n_responses}')
 
-            # Stop iterations when model is passive
-            if sigma_max < 1.0:
-                break
+            # Get state space model C, D and E for current response
+            C, D, E = self._get_state_space_CDE(idx_pole_group, idx_response)
 
-        # PASSIVATION PROCESS DONE; model is either passive or max. number of iterations have been exceeded
-        if t == max_iterations:
-            warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
-                          'exceeded.', RuntimeWarning, stacklevel=2)
+            # Flag that's True if we have non zero D
+            have_D = len(np.nonzero(D)[0]) == 0
 
-        # Save/update model parameters (perturbed residues)
-        self.history_max_sigma = np.array(self.history_max_sigma)
+            # Flag that's True if we have non zero E
+            have_E = len(np.nonzero(E)[0]) == 0
 
-        n_ports = np.shape(D)[0]
-        poles=self.poles[idx_pole_group]
-        residues=self.residues[idx_pole_group]
-        constant=self.constant[idx_pole_group]
+            # Initialize Ct to C
+            Ct = C
 
-        for i in range(n_ports):
-            k = 0   # Column index in C_t
-            for j in range(n_ports):
-                i_response = i * n_ports + j
-                for z, pole in enumerate(poles):
-                    if np.imag(pole) == 0.0:
-                        # Real pole -> Real residue
-                        residues[i_response, z] = C_t[i, k]
-                        k += 1
-                    else:
-                        # Complex-conjugate pole -> Complex-conjugate residue
-                        residues[i_response, z] = C_t[i, k] + 1j * C_t[i, k + 1]
-                        k += 2
-                if D_t is not None:
-                    constant[i_response] = D_t[i, j]
+            # Iterative compensation of passivity violations
+            iteration = 0
+            while iteration < max_iterations:
+                logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
+
+                # Get S
+                S = Ct @ F
+                if have_D:
+                    S += D
+                if have_E:
+                    S += s_eval[:, None, None] * E
+
+                # Singular value decomposition
+                u, sigma, vh = np.linalg.svd(S, full_matrices=False)
+
+                # Maximum singular value
+                sigma_max = np.max(sigma)
+
+                # Stop iterations if model is passive
+                if sigma_max < 1.0:
+                    break
+
+                # Set all sigma that are <= delta to zero
+                sigma[sigma <= delta] = 0
+
+                # Subtract delta from all sigma that are > delta
+                sigma[sigma > delta] -= delta
+
+                # Calculate S_viol
+                S_viol = (u * sigma[:, None, :]) @ vh
+
+                # Solve overdetermined least squares problem for Cviol
+
+                # Solve S_viol = C_viol F for C_viol. This is a system of the form x A = b but
+                # because (AB)^T = B^T A^T, we can convert it into a system of form A x = b by transposing:
+                #
+                # Solve F^T C_viol^T = S_viol^T for C_viol^T
+                # C_viol is of shape 1 x n_poles and
+                # F is of shape n_poles x n_poles and
+                # S_viol is of shape 1 x 1, so S_viol^T == S_viol
+                # (of course in addition to that we have the outermost dimension for the frequency for all of them)
+
+                _A = np.vstack((np.real(F_transpose), np.imag(F_transpose)))
+                _b = np.hstack((np.real(S_viol), np.imag(S_viol)))
+                # Solve least squares
+                C_viol, residuals, rank, singular_values = np.linalg.lstsq(_A, _b, rcond=None)
+
+                # Perturb residues by subtracting respective row and column in C_t
+                Ct -= C_viol
+
+                iteration += 1
+
+            # Warn if maximum number of iterations has been exceeded
+            if iteration == max_iterations:
+                warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
+                              'exceeded.', RuntimeWarning, stacklevel=2)
+
+            # Update model residues
+            residues=self.residues[idx_pole_group]
+
+            idx_Ct = 0   # Column index in Ct
+            for idx_residue, residue in enumerate(residues):
+                if np.imag(residue) == 0.0:
+                    # Real residue
+                    residues[idx_response, idx_residue] = Ct[idx_Ct]
+                    idx_Ct += 1
+                else:
+                    # Complex-conjugate residue
+                    residues[idx_response, idx_residue] = Ct[idx_Ct] + 1j * Ct[idx_Ct + 1]
+                    idx_Ct += 2
+
+            logger.info(f'Finished passivity enforcement for response {idx_response+1} of {n_responses}')
 
     def write_npz(self, path: str) -> None:
         """
