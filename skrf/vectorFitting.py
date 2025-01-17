@@ -405,11 +405,11 @@ class VectorFitting:
 
             logger.info(f'Finished vector_fit for pole group {idx_pole_group+1} of {n_pole_groups}')
 
-        # Print model summary
-        self.print_model_summary(verbose)
-
         wall_clock_time = timer() - timer_start
         logger.info(f'Finished vector_fit. Time elapsed = {wall_clock_time:.4e} seconds\n')
+
+        # Print model summary
+        self.print_model_summary(verbose)
 
     def _vector_fit(self, poles, omega, responses, weights, fit_constant, fit_proportional,
                     memory_saver, max_iterations, stagnation_threshold, abstol):
@@ -767,11 +767,11 @@ class VectorFitting:
 
             logger.info(f'Finished auto_fit for pole group {idx_pole_group+1} of {n_pole_groups}')
 
-        # Print model summary
-        self.print_model_summary(verbose)
-
         wall_clock_time = timer() - timer_start
         logger.info(f'Finished auto_fit. Time elapsed = {wall_clock_time:.4e} seconds\n')
+
+        # Print model summary
+        self.print_model_summary(verbose)
 
     def _auto_fit(self,
                   poles, omega, responses, weights, fit_constant, fit_proportional, memory_saver,
