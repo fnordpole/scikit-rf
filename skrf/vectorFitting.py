@@ -2398,7 +2398,7 @@ class VectorFitting:
 
         return error
 
-    def _get_state_space_ABCDE(self, idx_pole_group
+    def _get_state_space_ABCDE(self, idx_pole_group, idx_response = None,
                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Private method.
@@ -2449,29 +2449,98 @@ class VectorFitting:
         constant=self.constant[idx_pole_group]
         proportional=self.proportional[idx_pole_group]
 
-        # Determine size of the matrix system. Note: This is the n_ports inside of
-        # the pole group and not the n_ports of the entire network!
-        n_ports = int(np.sqrt(np.shape(residues)[0]))
-
         n_poles_real = np.sum(poles.imag == 0)
         n_poles_complex = np.sum(poles.imag != 0)
 
-        n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
+        if idx_response is None:
+            # Build A, B, C, D and E for all responses in of the pole group
 
-        # State-space matrix A holds the poles on the diagonal as real values with imaginary parts on the sub-diagonal
-        # State-space matrix B holds coefficients (1, 2, or 0), depending on the respective type of pole in A
-        # Assemble A = [[poles_real,   0,                  0],
-        #               [0,            real(poles_complex),   imag(poles_complex],
-        #               [0,            -imag(poles_complex),  real(poles_complex]]
-        A = np.identity(n_matrix)
-        B = np.zeros(shape=(n_matrix, n_ports))
-        i_A = 0  # index on diagonal of A
-        for j in range(n_ports):
+            # Determine size of the matrix system. Note: This is the n_ports inside of
+            # the pole group and not the n_ports of the entire network!
+            n_ports = int(np.sqrt(np.shape(residues)[0]))
+
+            n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
+
+            # State-space matrix A holds the poles on the diagonal as real values with imaginary parts on the sub-diagonal
+            # State-space matrix B holds coefficients (1, 2, or 0), depending on the respective type of pole in A
+            # Assemble A = [[poles_real,   0,                  0],
+            #               [0,            real(poles_complex),   imag(poles_complex],
+            #               [0,            -imag(poles_complex),  real(poles_complex]]
+            A = np.identity(n_matrix)
+            B = np.zeros(shape=(n_matrix, n_ports))
+            i_A = 0  # index on diagonal of A
+            for j in range(n_ports):
+                for pole in poles:
+                    if np.imag(pole) == 0.0:
+                        # Real pole
+                        A[i_A, i_A] = np.real(pole)
+                        B[i_A, j] = 1
+                        i_A += 1
+                    else:
+                        # Complex-conjugate pole
+                        A[i_A, i_A] = np.real(pole)
+                        A[i_A, i_A + 1] = np.imag(pole)
+                        A[i_A + 1, i_A] = -1 * np.imag(pole)
+                        A[i_A + 1, i_A + 1] = np.real(pole)
+                        B[i_A, j] = 2
+                        i_A += 2
+
+            # State-space matrix C holds the residues
+            # Assemble C = [[R1.11, R1.12, R1.13, ...], [R2.11, R2.12, R2.13, ...], ...]
+            C = np.zeros(shape=(n_ports, n_matrix))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # i: row index
+                    # j: column index
+                    i_response = i * n_ports + j
+                    j_residues = 0
+                    for residue in residues[i_response]:
+                        if np.imag(residue) == 0.0:
+                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
+                            j_residues += 1
+                        else:
+                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
+                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues + 1] = np.imag(residue)
+                            j_residues += 2
+
+            # State-space matrix D holds the constants
+            # Assemble D = [[d11, d12, ...], [d21, d22, ...], ...]
+            D = np.zeros(shape=(n_ports, n_ports))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # i: row index
+                    # j: column index
+                    i_response = i * n_ports + j
+                    D[i, j] = constant[i_response]
+
+            # Etate-space matrix E holds the proportional coefficients (usually 0 in case of fitted S-parameters)
+            # Assemble E = [[e11, e12, ...], [e21, e22, ...], ...]
+            E = np.zeros(shape=(n_ports, n_ports))
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # i: row index
+                    # j: column index
+                    i_response = i * n_ports + j
+                    E[i, j] = proportional[i_response]
+        else:
+            # Build A, B, C, D and E only for the specified response
+            n_matrix = n_poles_real + 2 * n_poles_complex
+
+            # State-space matrix A holds the poles on the diagonal as real values with imaginary parts
+            # on the sub-diagonal. State-space matrix B holds coefficients (1, 2, or 0), depending
+            # on the respective type of pole in A
+
+            # Assemble A = [[poles_real,   0,                  0],
+            #               [0,            real(poles_complex),   imag(poles_complex],
+            #               [0,            -imag(poles_complex),  real(poles_complex]]
+            A = np.identity(n_matrix)
+            B = np.zeros(shape=(n_matrix, 1))
+            i_A = 0  # index on diagonal of A
             for pole in poles:
                 if np.imag(pole) == 0.0:
                     # Real pole
                     A[i_A, i_A] = np.real(pole)
-                    B[i_A, j] = 1
+                    B[i_A, 0] = 1
                     i_A += 1
                 else:
                     # Complex-conjugate pole
@@ -2479,46 +2548,31 @@ class VectorFitting:
                     A[i_A, i_A + 1] = np.imag(pole)
                     A[i_A + 1, i_A] = -1 * np.imag(pole)
                     A[i_A + 1, i_A + 1] = np.real(pole)
-                    B[i_A, j] = 2
+                    B[i_A, 0] = 2
                     i_A += 2
 
-        # State-space matrix C holds the residues
-        # Assemble C = [[R1.11, R1.12, R1.13, ...], [R2.11, R2.12, R2.13, ...], ...]
-        C = np.zeros(shape=(n_ports, n_matrix))
-        for i in range(n_ports):
-            for j in range(n_ports):
-                # i: row index
-                # j: column index
-                i_response = i * n_ports + j
-                j_residues = 0
-                for residue in residues[i_response]:
-                    if np.imag(residue) == 0.0:
-                        C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
-                        j_residues += 1
-                    else:
-                        C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
-                        C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues + 1] = np.imag(residue)
-                        j_residues += 2
+            # State-space matrix C holds the residues
+            # Assemble C = [[R1.11, R1.12, R1.13, ...]]
+            C = np.zeros(shape=(1, n_matrix))
 
-        # State-space matrix D holds the constants
-        # Assemble D = [[d11, d12, ...], [d21, d22, ...], ...]
-        D = np.zeros(shape=(n_ports, n_ports))
-        for i in range(n_ports):
-            for j in range(n_ports):
-                # i: row index
-                # j: column index
-                i_response = i * n_ports + j
-                D[i, j] = constant[i_response]
+            j_residues = 0
+            for residue in residues[idx_response]:
+                if np.imag(residue) == 0.0:
+                    C[0, j_residues] = np.real(residue)
+                    j_residues += 1
+                else:
+                    C[0, j_residues] = np.real(residue)
+                    C[0, j_residues + 1] = np.imag(residue)
+                    j_residues += 2
 
-        # Etate-space matrix E holds the proportional coefficients (usually 0 in case of fitted S-parameters)
-        # Assemble E = [[e11, e12, ...], [e21, e22, ...], ...]
-        E = np.zeros(shape=(n_ports, n_ports))
-        for i in range(n_ports):
-            for j in range(n_ports):
-                # i: row index
-                # j: column index
-                i_response = i * n_ports + j
-                E[i, j] = proportional[i_response]
+            # State-space matrix D holds the constant
+            D = np.zeros(shape=(1, 1))
+            D[0, 0] = constant[idx_response]
+
+            # State-space matrix E holds the proportional
+            E = np.zeros(shape=(1, 1))
+            E[0, 0] = proportional[idx_response]
+
 
         return A, B, C, D, E
 
@@ -2857,7 +2911,13 @@ class VectorFitting:
         stsp_S += D + s[:, None, None] * E
         return stsp_S
 
-    def passivity_test(self, idx_pole_group = None, parameter_type: str = 's', verbose: bool = False, method = None):
+    def passivity_test(self,
+        idx_pole_group = None,
+        parameter_type: str = 's',
+        verbose: bool = False,
+        method = None,
+        idx_response = None,
+        ):
         """
         Evaluates the passivity of reciprocal vector fitted models by means of a half-size test matrix [#]_. Any
         existing frequency bands of passivity violations will be returned as a sorted list.
@@ -2920,14 +2980,14 @@ class VectorFitting:
             violation_bands=[]
             n_pole_groups=len(self.poles)
             for idx_pole_group in range(n_pole_groups):
-                violation_bands.append(self._passivity_test(idx_pole_group, verbose, method))
+                violation_bands.append(self._passivity_test(idx_pole_group, verbose, method, idx_response))
         else:
             # Return only the violation bands for the specified pole group
-            violation_bands=self._passivity_test(idx_pole_group, verbose, method)
+            violation_bands=self._passivity_test(idx_pole_group, verbose, method, idx_response)
 
         return violation_bands
 
-    def _passivity_test(self, idx_pole_group, verbose = False, method = None) -> np.ndarray:
+    def _passivity_test(self, idx_pole_group, verbose = False, method = None, idx_response = None) -> np.ndarray:
         # Runs either the half size or hamiltonian passivity test, depending on symmetry.
         # Description of arguments see passivity_test
         #
@@ -2946,8 +3006,11 @@ class VectorFitting:
         residues = self.residues[idx_pole_group]
         constant = self.constant[idx_pole_group]
 
-        # Calculate n_responses is this pole group
-        n_responses = np.size(residues, axis=0)
+        if idx_response is None:
+            # Calculate n_responses is this pole group
+            n_responses = self._get_n_responses(idx_pole_group)
+        else:
+            n_responses = 1
 
         # Initialize symmetry flag. Will be set to True if residues and constant are both symmetric.
         is_symmetric = False
@@ -2974,7 +3037,7 @@ class VectorFitting:
             # If not symmetric we always use the hamiltonian test regardless of method requested
             if verbose:
                 print("Using full size hamiltonian passivity test because matrix is not symmetric")
-            return self._passivity_test_hamiltonian(idx_pole_group)
+            return self._passivity_test_hamiltonian(idx_pole_group, idx_response)
         else:
             # If symmetric, we use half-size by default but we use hamiltonian if requested via method
 
@@ -2984,21 +3047,21 @@ class VectorFitting:
                 if method.lower() == 'hamiltonian':
                     if verbose:
                         print("Requested full size hamiltonian passivity test even if matrix is symmetric")
-                    return self._passivity_test_hamiltonian(idx_pole_group)
+                    return self._passivity_test_hamiltonian(idx_pole_group, idx_response)
 
             # Otherwise use half size as default
             if verbose:
                 print("Using fast half size passivity test because matrix is symmetric")
             return self._passivity_test_half_size(idx_pole_group)
 
-    def _passivity_test_hamiltonian(self, idx_pole_group, reltol = 1e-9) -> np.ndarray:
+    def _passivity_test_hamiltonian(self, idx_pole_group, idx_response = None, reltol = 1e-9) -> np.ndarray:
         # Hamiltonian based passivity test. Description of arguments see passivity_test
         # Works also for non-symmetric state space model
         #
         # The operator @ is the same as numpy.matmul()
 
         # Get state-space matrices
-        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
+        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group, idx_response)
 
         n_ports = np.shape(D)[0]
 
