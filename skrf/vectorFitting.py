@@ -3328,7 +3328,12 @@ class VectorFitting:
         # in a simple element-wise multiplication because F is diagonal!
         # All of this saves a ton of memory because the sparse F matrix is never built and a ton of cpu.
         F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
-        F_transpose = np.transpose(F)
+
+        # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
+        F_transpose = np.squeeze(F)
+
+        # Build A_ls for the least squares problem A x = b
+        A_ls = np.vstack((np.real(F_transpose), np.imag(F_transpose)))
 
         # Get the number of responses in the pole group
         n_responses = self._get_n_responses(idx_pole_group)
@@ -3341,10 +3346,10 @@ class VectorFitting:
             C, D, E = self._get_state_space_CDE(idx_pole_group, idx_response)
 
             # Flag that's True if we have non zero D
-            have_D = len(np.nonzero(D)[0]) == 0
+            have_D = D != 0
 
             # Flag that's True if we have non zero E
-            have_E = len(np.nonzero(E)[0]) == 0
+            have_E = E != 0
 
             # Initialize Ct to C
             Ct = C
@@ -3378,7 +3383,7 @@ class VectorFitting:
                 sigma[sigma > delta] -= delta
 
                 # Calculate S_viol
-                S_viol = (u * sigma[:, None, :]) @ vh
+                S_viol = (u * sigma) @ vh
 
                 # Solve overdetermined least squares problem for Cviol
 
@@ -3391,13 +3396,14 @@ class VectorFitting:
                 # S_viol is of shape 1 x 1, so S_viol^T == S_viol
                 # (of course in addition to that we have the outermost dimension for the frequency for all of them)
 
-                _A = np.vstack((np.real(F_transpose), np.imag(F_transpose)))
-                _b = np.hstack((np.real(S_viol), np.imag(S_viol)))
+                # Build b_ls for the least squares problem A x = b
+                b_ls = np.vstack((np.real(S_viol), np.imag(S_viol)))
+
                 # Solve least squares
-                C_viol, residuals, rank, singular_values = np.linalg.lstsq(_A, _b, rcond=None)
+                C_viol, residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
 
                 # Perturb residues by subtracting respective row and column in C_t
-                Ct -= C_viol
+                Ct -= np.squeeze(C_viol)
 
                 iteration += 1
 
@@ -3407,17 +3413,17 @@ class VectorFitting:
                               'exceeded.', RuntimeWarning, stacklevel=2)
 
             # Update model residues
-            residues=self.residues[idx_pole_group]
+            residues=self.residues[idx_pole_group][idx_response]
 
             idx_Ct = 0   # Column index in Ct
             for idx_residue, residue in enumerate(residues):
                 if np.imag(residue) == 0.0:
                     # Real residue
-                    residues[idx_response, idx_residue] = Ct[idx_Ct]
+                    residues[idx_residue] = Ct[idx_Ct]
                     idx_Ct += 1
                 else:
                     # Complex-conjugate residue
-                    residues[idx_response, idx_residue] = Ct[idx_Ct] + 1j * Ct[idx_Ct + 1]
+                    residues[idx_residue] = Ct[idx_Ct] + 1j * Ct[idx_Ct + 1]
                     idx_Ct += 2
 
             logger.info(f'Finished passivity enforcement for response {idx_response+1} of {n_responses}')
