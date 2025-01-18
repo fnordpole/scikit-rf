@@ -2446,6 +2446,123 @@ class VectorFitting:
 
         # Assemble real-valued state-space matrices A, B, C, D, E from fitted complex-valued pole-residue model
 
+        if idx_pole_group == None:
+            # Build A, B, C, D and E for the total system including all pole groups
+
+            # Get total number of ports including all pole groups
+            n_ports = self._get_n_ports()
+            # Get n_responses
+            n_responses = n_ports * n_ports
+
+            A_view = np.empty((n_ports, n_ports))
+            B_view = np.empty((n_ports, n_ports))
+            C_view = np.empty((n_ports, n_ports))
+
+            # Get model orders for every pole group
+            model_orders=np.array([self.get_model_order(x) for x in range(len(self.poles))])
+
+            # For every big column of C we need to find the number of subcolumns
+            n_subcolumns_in_columns_of_C = np.empty((n_ports))
+            # Working column wise: j'th column:
+            for j in range(n_ports):
+                # Get indices of the responses of the first column S11, S21, S31, ...
+                indices_responses = j + np.arange(0, n_responses, n_ports)
+                # Get pole group of every response
+                indices_pole_groups = self.map_idx_response_to_idx_pole_group[indices_responses]
+                # Get sorted unique pole groups
+                sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
+                # Get total model order for column
+                model_order_column = np.sum(model_orders[sorted_unique_indices_pole_groups])
+                # Save
+                n_subcolumns_in_columns_of_C[j] = model_order_column
+
+            # Create empty output matrices
+            n_A = np.sum(n_subcolumns_in_columns_of_C)
+            A = np.zeros(n_A, n_A)
+            B = np.zeros(shape=(n_A, n_ports))
+            C = np.zeros(shape=(n_ports, n_A))
+            D = np.zeros(shape=(n_ports, n_ports))
+            E = np.zeros(shape=(n_ports, n_ports))
+
+            # Index on diagonal of A
+            idx_diag_A = 0
+            # Column offset of the columns of C
+            offset_col_C = 0
+            # Working column wise for every big column j of C:
+            for j in range(n_ports):
+                # Get indices of the responses of the first column S11, S21, S31, ...
+                indices_responses = j + np.arange(0, n_responses, n_ports)
+                # Get pole group of every response
+                indices_pole_groups = self.map_idx_response_to_idx_pole_group[indices_responses]
+                # Get sorted unique pole groups
+                sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
+                # Get number of poles for every unique pole group
+                model_orders_per_group = [self.get_model_order(x) for x in sorted_unique_indices_pole_groups]
+                # Get total model order for column
+                model_order_column = np.sum(model_orders_per_group)
+                # Create dict mapping sorted_unique_indices_pole_groups to i (row index)
+                map_sorted_unique_indices_pole_groups_to_i = \
+                    {x: np.nonzero(indices_pole_groups == x)[0] for x in sorted_unique_indices_pole_groups}
+
+                # Work pole-group-wise
+                for idx_pole_group in sorted_unique_indices_pole_groups:
+                    poles = self.poles[idx_pole_group]
+                    residues = self.poles[idx_pole_group]
+                    constant = self.constant[idx_pole_group]
+                    proportional = self.proportional[idx_pole_group]
+
+                    # Create contribution of this pole group into A and B
+                    for pole in poles:
+                        if np.imag(pole) == 0.0:
+                            # Real pole
+                            A[idx_diag_A, idx_diag_A] = np.real(pole)
+                            B[idx_diag_A, j] = 1
+                            idx_diag_A += 1
+                        else:
+                            # Complex-conjugate pole
+                            A[idx_diag_A, idx_diag_A] = np.real(pole)
+                            A[idx_diag_A, idx_diag_A + 1] = np.imag(pole)
+                            A[idx_diag_A + 1, idx_diag_A] = -1 * np.imag(pole)
+                            A[idx_diag_A + 1, idx_diag_A + 1] = np.real(pole)
+                            B[idx_diag_A, j] = 2
+                            idx_diag_A += 2
+
+                    # Process all responses that are part of this pole group
+                    for i in map_sorted_unique_indices_pole_groups_to_i[idx_pole_group]:
+                        # Get idx_response
+                        idx_response = j + n_ports * i
+                        idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
+
+                        # Initialize idx_col_C to offset_col_C
+                        idx_col_C = offset_col_C
+                        for residue in residues[idx_pole_group_member]:
+                            if np.imag(residue) == 0.0:
+                                C[i, idx_col_C] = np.real(residue)
+                                idx_col_C += 1
+                            else:
+                                C[i, idx_col_C] = np.real(residue)
+                                C[i, idx_col_C + 1] = np.imag(residue)
+                                idx_col_C += 2
+                        # Create view on C
+                        C_view[i, j] = C[i, offset_col_C:idx_col_C]
+
+                        # Create view on A
+                        A_view[i, j] = A[offset_col_C:idx_col_C, offset_col_C:idx_col_C]
+
+                        # Create view on B
+                        B_view[i, j] = B[offset_col_C:idx_col_C, j]
+
+                        # Create D and E
+                        D[i, j] = constant[idx_response]
+                        E[i, j] = proportional[idx_response]
+
+                    # Increment offset for next pole group
+                    offset_col_C += len(poles)
+
+            return A, B, C, D, E
+
+        # We have idx_pole_group
+
         # Get data
         poles=self.poles[idx_pole_group]
         residues=self.residues[idx_pole_group]
