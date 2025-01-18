@@ -2454,9 +2454,9 @@ class VectorFitting:
             # Get n_responses
             n_responses = n_ports * n_ports
 
-            A_view = np.empty((n_ports, n_ports))
-            B_view = np.empty((n_ports, n_ports))
-            C_view = np.empty((n_ports, n_ports))
+            A_view = np.empty((n_ports, n_ports), dtype=object)
+            B_view = np.empty((n_ports, n_ports), dtype=object)
+            C_view = np.empty((n_ports, n_ports), dtype=object)
 
             # Get model orders for every pole group
             model_orders=np.array([self.get_model_order(x) for x in range(len(self.poles))])
@@ -2472,13 +2472,13 @@ class VectorFitting:
                 # Get sorted unique pole groups
                 sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
                 # Get total model order for column
-                model_order_column = np.sum(model_orders[sorted_unique_indices_pole_groups])
+                model_order_column = int(np.sum(model_orders[sorted_unique_indices_pole_groups]))
                 # Save
                 n_subcolumns_in_columns_of_C[j] = model_order_column
 
             # Create empty output matrices
-            n_A = np.sum(n_subcolumns_in_columns_of_C)
-            A = np.zeros(n_A, n_A)
+            n_A = int(np.sum(n_subcolumns_in_columns_of_C))
+            A = np.zeros(shape=(n_A, n_A))
             B = np.zeros(shape=(n_A, n_ports))
             C = np.zeros(shape=(n_ports, n_A))
             D = np.zeros(shape=(n_ports, n_ports))
@@ -2507,7 +2507,7 @@ class VectorFitting:
                 # Work pole-group-wise
                 for idx_pole_group in sorted_unique_indices_pole_groups:
                     poles = self.poles[idx_pole_group]
-                    residues = self.poles[idx_pole_group]
+                    residues = self.residues[idx_pole_group]
                     constant = self.constant[idx_pole_group]
                     proportional = self.proportional[idx_pole_group]
 
@@ -2557,7 +2557,7 @@ class VectorFitting:
                         E[i, j] = proportional[idx_response]
 
                     # Increment offset for next pole group
-                    offset_col_C += len(poles)
+                    offset_col_C = idx_col_C
 
             return A, B, C, D, E
 
@@ -3242,7 +3242,7 @@ class VectorFitting:
         # The operator @ is the same as numpy.matmul()
 
         # Get state-space matrices
-        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
+        A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group=None)
 
         n_ports = np.shape(D)[0]
 
