@@ -1225,6 +1225,11 @@ class VectorFitting:
             print(f'Total absolute error (RMS) = {self.get_total_abs_error():.4e}')
             print(f'Total relative error (RMS) = {self.get_total_rel_error():.4e}')
 
+        if self.is_symmetric():
+            print('Model is symmetric = True')
+        else:
+            print('Model is symmetric = False')
+
         if self._all_proportional_are_zero():
             print(f'Model is passive = {self.is_passive()}')
         else:
@@ -2987,39 +2992,8 @@ class VectorFitting:
         #
         # Note: I leave it at default atol for now but this should be investigated and maybe adjusted.
 
-
-
-        # Initialize symmetry flag. Will be set to True if residues and constant are both symmetric.
-        is_symmetric = False
-
-        # Symmetry can only be achieved if all poles are in one group.
-        if len(self.poles) == 1:
-            # Get residues and constant
-            residues = self.residues[0]
-            constant = self.constant[0]
-
-            # Get number of responses
-            n_responses = self._get_n_responses(0)
-
-            if n_responses >= 4 and np.mod(np.sqrt(n_responses), 1) == 0:
-                # Calculate n_matrix
-                n_matrix = int(np.sqrt(n_responses))
-                # Reshape only the first residue of all responses into
-                # size sqrt(n_responses) x sqrt(n_responses). It is assumed that for the other residues
-                # the symmetry will be the same.
-                residues = np.reshape(residues[:, 0], shape=(n_matrix, n_matrix))
-                # Test for symmetry
-                residues_is_symmetric = issymmetric(residues, rtol=1e-5)
-
-                # Also check constant symmetry if residues are symmetric
-                if residues_is_symmetric:
-                    # Reshape constant into sqrt(n_responses) x sqrt(n_responses)
-                    constant = np.reshape(constant, shape=(n_matrix, n_matrix))
-                    # Test for symmetry
-                    is_symmetric = issymmetric(constant, rtol=1e-5)
-
         # Run passivity test depending on symmetry
-        if not is_symmetric:
+        if not self.is_symmetric():
             # If not symmetric we always use the hamiltonian test regardless of method requested
             if verbose:
                 print("Matrix is not symmetric. Using full size hamiltonian passivity test.")
@@ -3168,6 +3142,47 @@ class VectorFitting:
                 violation_bands.append([omega_start, omega_stop])
 
         return np.array(violation_bands)
+
+    def is_symmetric(self) -> bool:
+        # Checks whether the model is symmetric
+
+        # Symmetry can only be achieved if all poles are in one group.
+        if len(self.poles) != 1:
+            return False
+
+        # Get number of responses
+        n_responses = self._get_n_responses(0)
+
+        # Symmetry can only be achieved if we have at least 4 responses
+        if n_responses < 4:
+            return False
+
+        # Symmetry can only be achieved if the square root of n_responses has no fractional part
+        if np.mod(np.sqrt(n_responses), 1) != 0:
+            return False
+
+        # Get residues and constant of the first and only pole group 0
+        residues = self.residues[0]
+        # Calculate n_matrix
+        n_matrix = int(np.sqrt(n_responses))
+        # Reshape only the first residue of all responses into
+        # size sqrt(n_responses) x sqrt(n_responses). It is assumed that for the other residues
+        # the symmetry will be the same.
+        residues = np.reshape(residues[:, 0], shape=(n_matrix, n_matrix))
+        # Test residues for symmetry
+        if not issymmetric(residues, rtol=1e-5):
+            return False
+
+        # Get constant
+        constant = self.constant[0]
+        # Reshape constant into sqrt(n_responses) x sqrt(n_responses)
+        constant = np.reshape(constant, shape=(n_matrix, n_matrix))
+        # Test constant for symmetry
+        if not issymmetric(constant, rtol=1e-5):
+            return False
+
+        # Otherwise we are symmetric! Yay!
+        return True
 
     def is_passive(self, idx_pole_group = None, parameter_type: str = 's') -> bool:
         """
