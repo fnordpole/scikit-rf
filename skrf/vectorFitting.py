@@ -3226,6 +3226,7 @@ class VectorFitting:
         parameter_type: str = 's',
         max_iterations: int = 100,
         verbose = False,
+        perturb_constant = False,
         ) -> None:
         """
         Enforces the passivity of the vector fitted model, if required. This is an implementation of the method
@@ -3233,20 +3234,25 @@ class VectorFitting:
 
         Parameters
         ----------
-        n_samples : int, optional
+        n_samples: int, optional
             Number of linearly spaced frequency samples at which passivity will be evaluated and enforced.
             (Default: 100)
 
-        maximum_frequency_of_interest : float or None, optional
+        maximum_frequency_of_interest: float or None, optional
             Highest frequency of interest for the passivity enforcement (in Hz, not rad/s). This limit usually
             equals the highest sample frequency of the fitted Network. If None, the highest frequency in
             :attr:`self.network` is used, which must not be None is this case. If `f_max` is not None, it overrides the
             highest frequency in :attr:`self.network`.
 
-        parameter_type : str, optional
+        parameter_type: str, optional
             Representation type of the fitted frequency responses. Either *scattering* (:attr:`s` or :attr:`S`),
             *impedance* (:attr:`z` or :attr:`Z`) or *admittance* (:attr:`y` or :attr:`Y`). Currently, only scattering
             parameters are supported for passivity evaluation.
+
+        perturb_constant: bool, optional
+            Enables or disables constant perturbation in passivity enforcement. If this is enabled, the DC point
+            may be affected in a negative way. It is thus disabled by default. Use it only if passivity enforcement
+            is not successful without it.
 
         Returns
         -------
@@ -3284,7 +3290,8 @@ class VectorFitting:
         """
 
 
-        self._passivity_enforce(n_samples, maximum_frequency_of_interest, parameter_type, max_iterations, verbose)
+        self._passivity_enforce(
+            n_samples, maximum_frequency_of_interest, parameter_type, max_iterations, verbose, perturb_constant)
 
         # Print model summary
         self.print_model_summary(verbose)
@@ -3303,6 +3310,7 @@ class VectorFitting:
         parameter_type,
         max_iterations,
         verbose,
+        perturb_constant,
         ) -> None:
         # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
 
@@ -3360,8 +3368,6 @@ class VectorFitting:
         # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
         # would happen if it's not dense enough.
         omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
-        #omega_eval = 2 * np.pi * np.linspace(0.0001e12, 0.01e12, n_samples)
-        #omega_eval = np.insert(omega_eval, 0, [1, 5, 10, 100, 500, 1000, 1e4] )
         s_eval = 1j * omega_eval
 
         # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
@@ -3369,7 +3375,7 @@ class VectorFitting:
         delta = 0.999
 
         # Get state space model
-        A, B, C, D, E, A_view, B_view, C_view = self._get_state_space_ABCDE(create_views=True)
+        A, B, C, D, E, A_view, B_view, C_view = self._get_state_space_ABCDE(create_views = True)
 
         # Size n_A of square matrix A
         n_A = np.size(A, axis=0)
@@ -3387,10 +3393,10 @@ class VectorFitting:
         A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
 
         if verbose:
-            if have_D:
-                print('Passivity enforcement: Perturbing residues and constant')
+            if have_D and perturb_constant:
+                print('Perturbing residues and constant')
             else:
-               print('Passivity enforcement: Perturbing only residues')
+               print('Perturbing only residues')
 
         # Build F0_transpose
         for i in range(n_ports):
@@ -3481,10 +3487,11 @@ class VectorFitting:
                     # Solve least squares
                     x, residuals, rank, singular_values = np.linalg.lstsq(A_ls[i][j], b_ls, rcond=None)
 
-                    # Save C_viol and D_viol
+                    # Perturb C and D
                     if have_D:
-                        C_view[i][j][:] = -x[:-1]
-                        D[i, j] -= x[-1] * D_norm
+                        C_view[i][j][:] -= x[:-1]
+                        if perturb_constant:
+                            D[i, j] -= x[-1] * D_norm
                     else:
                         C_view[i][j][:] = x
 
@@ -3523,6 +3530,7 @@ class VectorFitting:
             for i in range(n_ports):
                 for j in range(n_ports):
                     idx_response = i * n_ports + j
+                    idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
                     self.constant[idx_pole_group][idx_response] = D[i, j]
 
     def write_npz(self, path: str) -> None:
