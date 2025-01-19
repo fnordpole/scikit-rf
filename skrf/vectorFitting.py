@@ -3511,17 +3511,18 @@ class VectorFitting:
             for j in range(n_ports):
                 idx_response = i * n_ports + j
                 idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
-                residues = self.residues[idx_pole_group]
+                idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
+                residues = self.residues[idx_pole_group][idx_pole_group_member]
                 idx_column_Ct = 0
                 C_response = C_view[i][j]
-                for idx_residue, residue in enumerate(residues[idx_response]):
+                for idx_residue, residue in enumerate(residues):
                     if np.imag(residue) == 0.0:
                         # Real residue
-                        residues[idx_response, idx_residue] = C_response[idx_column_Ct]
+                        residues[idx_residue] = C_response[idx_column_Ct]
                         idx_column_Ct += 1
                     else:
                         # Complex-conjugate residue
-                        residues[idx_response, idx_residue] = \
+                        residues[idx_residue] = \
                             C_view[i][j][idx_column_Ct] + 1j * C_response[idx_column_Ct + 1]
                         idx_column_Ct += 2
 
@@ -3531,7 +3532,8 @@ class VectorFitting:
                 for j in range(n_ports):
                     idx_response = i * n_ports + j
                     idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
-                    self.constant[idx_pole_group][idx_response] = D[i, j]
+                    idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
+                    self.constant[idx_pole_group][idx_pole_group_member] = D[i, j]
 
     def write_npz(self, path: str) -> None:
         """
