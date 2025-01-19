@@ -139,6 +139,10 @@ class VectorFitting:
         # Initialize to False for every pole
         spurious=np.repeat(False, len(poles))
 
+        # Immediately return if we have no complex poles
+        if len(idx_poles_complex) == 0:
+            return spurious
+
         # Define function for integration
         def H(s, r, p):
             return np.abs(r / (1j * s - p) + np.conj(r) / (1j * s - np.conj(p)))**2
