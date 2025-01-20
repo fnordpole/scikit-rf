@@ -131,7 +131,7 @@ class VectorFitting:
         omega_poles_max=np.max(poles.imag)
 
         # Only complex poles are considered
-        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+        indices_poles_complex = np.nonzero(poles.imag != 0)[0]
 
         # Alle residues are considered
         n_responses=np.size(residues, axis=0)
@@ -140,7 +140,7 @@ class VectorFitting:
         spurious=np.repeat(False, len(poles))
 
         # Immediately return if we have no complex poles
-        if len(idx_poles_complex) == 0:
+        if len(indices_poles_complex) == 0:
             return spurious
 
         # Define function for integration
@@ -148,15 +148,17 @@ class VectorFitting:
             return np.abs(r / (1j * s - p) + np.conj(r) / (1j * s - np.conj(p)))**2
 
         # Collects all norms
-        norm2 = np.empty((n_responses, len(idx_poles_complex)))
+        norm2 = np.empty((n_responses, len(indices_poles_complex)))
 
         # Run for debug plotting
         # import matplotlib.pyplot as plt
         # omega_eval = np.linspace(omega_poles_min / 3, omega_poles_max * 3, 101)
 
-        for i in range(len(idx_poles_complex)):
+        for i in range(len(indices_poles_complex)):
             for j in range(n_responses):
-                y, err = integrate.quad(H, omega_poles_min / 3, omega_poles_max*3, args=(residues[j, i], poles[i]))
+                idx_pole_complex = indices_poles_complex[i]
+                y, err = integrate.quad(H, omega_poles_min / 3, omega_poles_max*3,
+                                        args=(residues[j, idx_pole_complex], poles[idx_pole_complex]))
                 norm2[j, i] = np.sqrt(y)
 
                 # Plot what has been integrated for debug
@@ -165,7 +167,7 @@ class VectorFitting:
                 # ax.plot(omega_eval, [f(s,residues[j, i], poles[i]) for s in omega_eval], linewidth=2.0)
                 # plt.show()
 
-        spurious[idx_poles_complex] = np.all(norm2 / np.mean(norm2) < spurious_pole_threshold, axis=0)
+        spurious[indices_poles_complex] = np.all(norm2 / np.mean(norm2) < spurious_pole_threshold, axis=0)
 
         return spurious
 
