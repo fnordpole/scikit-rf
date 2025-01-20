@@ -3641,11 +3641,11 @@ class VectorFitting:
                     else:
                         # Complex-conjugate residue
                         residues[idx_residue] = \
-                            C_view[i][j][idx_column_Ct] + 1j * C_response[idx_column_Ct + 1]
+                            C_response[idx_column_Ct] + 1j * C_response[idx_column_Ct + 1]
                         idx_column_Ct += 2
 
         # Update constant
-        if have_D:
+        if have_D and perturb_constant:
             for i in range(n_ports):
                 for j in range(n_ports):
                     idx_response = i * n_ports + j
