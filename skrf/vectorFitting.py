@@ -3604,7 +3604,7 @@ class VectorFitting:
                     F1[:, :-1] = F0
                     F1[:, -1] = 1 * D_norm[i][j][None, None]
                 else:
-                    F1 = F_view[i][j]
+                    F1 = F0
 
                 # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
                 F1_transpose = np.squeeze(F1)
