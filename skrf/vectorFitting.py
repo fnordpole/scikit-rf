@@ -3565,7 +3565,11 @@ class VectorFitting:
 
         # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
         # how this parameter influences the algorithm.
-        delta = 0.999
+        # This parameter has a really strong influence on the rms error in some tests I ran. Using 1-1e-4 instead
+        # of 1-1e-3 resulted in about 100x less rms error. On the other hand, it does not converge for 1-1e-5.
+        # So this algorithm seems to be extremely sensitive to the value of delta which is contradicting the
+        # paper that's not specific about the value of delta.
+        delta = 1-1e-3
 
         # Get state space model
         F, C, D, E, F_view, C_view = self._get_state_space_FCDE(s_eval, create_views = True)
