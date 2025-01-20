@@ -3529,6 +3529,7 @@ class VectorFitting:
                 # Size n_F0 of square matrix A0
                 n_F0 = np.size(F0, axis = 1)
 
+                # Build matrix F1 that contains F0 and optionally a row for D if we have it
                 if have_D:
                     F1 = np.empty((n_samples, n_F0 + 1), dtype=complex)
                     D_norm = np.linalg.norm(F0) / (n_samples * n_F0)
