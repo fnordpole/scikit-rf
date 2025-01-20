@@ -3003,35 +3003,98 @@ class VectorFitting:
         return A, B
 
     @staticmethod
-    def _get_S_from_state_space_ABCDE(omega: np.ndarray,
+    def _get_S_from_state_space_ABCDE(s: np.ndarray,
                           A: np.ndarray, B: np.ndarray, C: np.ndarray, D: np.ndarray, E: np.ndarray) -> np.ndarray:
-        """
-        Private method.
-        Returns the S-matrix of the vector fitted model calculated from the real-valued system matrices of the state-
-        space representation, as provided by `_get_state_space_ABCDE()`.
+        # Returns S-Parameters calculated from state space matrices A, B, C, D, E
+        n_A = np.size(A, axis = 0)
 
-        Parameters
-        ----------
-        freqs : ndarray
-            Frequencies (in Hz) at which to calculate the S-matrices.
-        A : ndarray
-        B : ndarray
-        C : ndarray
-        D : ndarray
-        E : ndarray
+        # Get total number of ports including all pole groups
+        n_ports = np.size(B, axis = 1)
 
-        Returns
-        -------
-        ndarray
-            Complex-valued S-matrices (fxNxN) calculated at frequencies `freqs`.
-        """
-        s = 1j * omega
-        dim_A = np.shape(A)[0]
-        # Improve! Explicit inversion slow and singularity problems! Not required. Matrix is block diag!!
-        stsp_poles = np.linalg.inv(s[:, None, None] * np.identity(dim_A)[None, :, :] - A[None, :, :])
-        stsp_S = np.matmul(np.matmul(C, stsp_poles), B)
-        stsp_S += D + s[:, None, None] * E
-        return stsp_S
+        # Get number of frequencies
+        n_freqs = np.size(s, axis = 0)
+
+        # Initialize F = (sI - A)^-1 B
+        F = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
+
+        # Iterate over diagonal of A
+        idx_diag_A = 0
+        while True:
+            # Get real and potential imaginary part
+            real_pole = A[idx_diag_A, idx_diag_A]
+            imag_pole = A[idx_diag_A, idx_diag_A + 1]
+            # Check if it is a real 1x1 block or a complex conjugate 2x2 block submatrix
+            if imag_pole == 0:
+                # Real 1x1 block
+                F[:, idx_diag_A, :] = (1 / (s - real_pole)) * B[None, idx_diag_A, :]
+                idx_diag_A += 1
+            else:
+                # Complex-conjugate pole
+                denom = (s - real_pole)**2 + imag_pole**2
+                F[:, idx_diag_A, :] = ((s - real_pole) / denom) * B[None, idx_diag_A, :]
+                F[:, idx_diag_A + 1, :] = (-1 * imag_pole / denom) * B[None, idx_diag_A, :]
+                idx_diag_A += 2
+
+            # Stop if we don't have at least 2 elements left on the diagonal
+            if idx_diag_A > n_A - 2:
+                break
+
+        # Handle potential singnle element left on the diagonal
+        if idx_diag_A != n_A:
+            # Get real part
+            real_pole = A[idx_diag_A, idx_diag_A]
+            # Real 1x1 block
+            F[:, idx_diag_A, :] = (1 / (s - real_pole)) * B[None, idx_diag_A, :]
+
+        # Calculate S
+        S = C @ F + D + s[:, None, None] * E
+
+        return S
+
+    def _get_S_from_model(self, s) -> np.ndarray:
+        # Returns S-Parameters from the model without calculating the state space model
+        # Input argument s is the complex frequency s = 1j * omega
+
+        # Get n_ports
+        n_ports = self._get_n_ports()
+
+        # Get n_freqs
+        n_freqs = np.size(s, axis = 0)
+
+        # Initialize output matrix
+        S = np.empty((n_freqs, n_ports, n_ports), dtype = complex)
+
+        # Build S
+        for i in range(n_ports):
+            for j in range(n_ports):
+                idx_response = i * n_ports + j
+
+                # Get pole group index
+                idx_pole_group=self.map_idx_response_to_idx_pole_group[idx_response]
+
+                # Get pole group member index
+                idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
+
+                # Get data
+                poles = self.poles[idx_pole_group]
+                residues = self.residues[idx_pole_group][idx_pole_group_member]
+                constant = self.constant[idx_pole_group][idx_pole_group_member]
+                proportional = self.proportional[idx_pole_group][idx_pole_group_member]
+
+                # Calculate S
+                S[:, i, j] = proportional * s + constant
+
+                for idx_pole, pole in enumerate(poles):
+                    if np.imag(pole) == 0.0:
+                        # Real pole
+                        S[:, i, j] += residues[idx_pole] / (s - pole)
+                    else:
+                        # Complex conjugate pole
+                        S[:, i, j] += \
+                            residues[idx_pole] / (s - pole) + \
+                            np.conjugate(residues[idx_pole]) / (s - np.conjugate(pole))
+
+        return S
 
     def passivity_test(self,
         parameter_type: str = 's',
@@ -3250,17 +3313,19 @@ class VectorFitting:
                 # Last band stops always at infinity
                 omega_start = omega
                 omega_stop = np.inf
-                omega_center = 1.1 * omega_start # 1.1 is chosen arbitrarily to have any frequency for evaluation
+                s_probe = 1j * 1.1 * omega_start # 1.1 is chosen arbitrarily to have any frequency for evaluation
             else:
                 # Intermediate band between this frequency and the previous one
                 omega_start = omega
                 omega_stop = crossover_omegas[i + 1]
-                omega_center = 0.5 * (omega_start + omega_stop)
+                s_probe = 1j * 0.5 * (omega_start + omega_stop)
 
             # Calculate singular values at the center frequency between crossover frequencies to identify violations
-            S_center = self._get_S_from_state_space_ABCDE(np.array([omega_center]), A, B, C, D, E)
+            # Todo: What is faster, via state space or via model directly?
+            S_probe = self._get_S_from_state_space_ABCDE(np.array([s_probe]), A, B, C, D, E)
+            # S_probe = self._get_S_from_model(np.array([s_probe]))
 
-            sigma = np.linalg.svd(S_center[0], compute_uv=False)
+            sigma = np.linalg.svd(S_probe[0], compute_uv=False)
 
             # Check if all singular values are less than unity
             is_passive = len(np.nonzero(sigma[sigma > 1])[0]) == 0
@@ -3849,13 +3914,13 @@ class VectorFitting:
 
         s = 2j * np.pi * np.array(freqs)
         n_ports = self._get_n_ports()
-        i_response = i * n_ports + j
+        idx_response = i * n_ports + j
 
         # Get pole group index
-        idx_pole_group=self.map_idx_response_to_idx_pole_group[i_response]
+        idx_pole_group=self.map_idx_response_to_idx_pole_group[idx_response]
 
         # Get pole group member index
-        idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[i_response]
+        idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
 
         # Get data
         poles = self.poles[idx_pole_group]
@@ -4258,7 +4323,7 @@ class VectorFitting:
         return self.plot('im', *args, **kwargs)
 
     @axes_kwarg
-    def plot_s_singular(self, freqs: Any = None, *, ax: Axes = None, idx_pole_group = None) -> Axes:
+    def plot_s_singular(self, freqs: Any = None, *, ax: Axes = None) -> Axes:
         """
         Plots the singular values of the vector fitted S-matrix in linear scale.
 
@@ -4294,32 +4359,21 @@ class VectorFitting:
             else:
                 freqs = self.network.f
 
-        # Calculate omega
-        omega = 2 * np.pi * freqs
+        # Calculate s
+        s = 2j * np.pi * freqs
 
-        if idx_pole_group is None:
-            n_pole_groups = len(self.poles)
-            pole_group_indices = np.arange(n_pole_groups)
-        else:
-            pole_group_indices = np.array([idx_pole_group])
+        # Get n_ports
+        n_ports = self._get_n_ports()
 
-        for idx_pole_group in pole_group_indices:
-            # Get system matrices of state-space representation
-            A, B, C, D, E = self._get_state_space_ABCDE(idx_pole_group)
+        # Calculate singular values for each frequency
+        u, sigma, vh = np.linalg.svd(self._get_S_from_model(s))
 
-            # Reset n_ports according to shape of D because depending on the pole group we can have a varying number
-            # of responses / sub-ports
-            n_ports = np.shape(D)[0]
-
-            # Calculate singular values for each frequency
-            u, sigma, vh = np.linalg.svd(self._get_S_from_state_space_ABCDE(omega, A, B, C, D, E))
-
-            # Plot the frequency response of each singular value
-            for n in range(n_ports):
-                ax.plot(freqs, sigma[:, n], label=fr'$\sigma$ pole_group={idx_pole_group+1}, idx={n + 1}')
-            ax.set_xlabel('Frequency (Hz)')
-            ax.set_ylabel('Magnitude')
-            ax.legend(loc='best')
+        # Plot the frequency response of each singular value
+        for n in range(n_ports):
+            ax.plot(freqs, sigma[:, n], label=fr'$\sigma$ idx={n + 1}')
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('Magnitude')
+        ax.legend(loc='best')
 
         # Add a horizontal line at y=1
         ax.plot(freqs, np.ones(np.size(freqs, axis=0)), color='black')
