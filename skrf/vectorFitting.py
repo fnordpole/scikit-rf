@@ -2595,6 +2595,7 @@ class VectorFitting:
 
         # These views enable easy accesss to the submatrices
         C_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        F_view = [x[:] for x in [[None] * n_ports] * n_ports]
 
         # Get model orders for every pole group
         model_orders=np.array([self.get_model_order(x) for x in range(len(self.poles))])
@@ -2682,6 +2683,9 @@ class VectorFitting:
                         # Create view on C
                         C_view[i][j] = C[i, offset_col_C:idx_col_C]
 
+                        # Create view on F
+                        F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
+
                     # Create D and E
                     D[i, j] = constant[idx_pole_group_member]
                     E[i, j] = proportional[idx_pole_group_member]
@@ -2690,7 +2694,7 @@ class VectorFitting:
                 offset_col_C = idx_col_C
 
         if create_views:
-            return F, C, D, E, C_view
+            return F, C, D, E, F_view, C_view
         else:
             return F, C, D, E
 
@@ -3499,16 +3503,7 @@ class VectorFitting:
         delta = 0.999
 
         # Get state space model
-        A, B, C, D, E, A_view, B_view, C_view = self._get_state_space_ABCDE(create_views = True)
-
-        # Size n_A of square matrix A
-        n_A = np.size(A, axis=0)
-
-        # Build F
-        F = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A)[None, :, :] - A[None, :, :]) @ B[None, :, :]
-
-        # Get state space model
-        F2, C2, D2, E2, C2_view = self._get_state_space_FCDE(s_eval, create_views = True)
+        F, C, D, E, F_view, C_view = self._get_state_space_FCDE(s_eval, create_views = True)
 
         # Flag that's True if we have non zero D
         have_D = len(np.nonzero(D)[0]) != 0
@@ -3528,33 +3523,25 @@ class VectorFitting:
         # Build F0_transpose
         for i in range(n_ports):
             for j in range(n_ports):
-                A0 = A_view[i][j]
-                B0 = B_view[i][j]
-                # Size n_A0 of square matrix A0
-                n_A0 = np.size(A0, axis=0)
+                # Get F0
+                F0 = F_view[i][j]
 
-                # Build matrix F = (sI - A)^-1 B
-                # Multiple things can be improved a lot in the calculation of F.
-                # The inversion is computationally fast because it is a complex diagonal matrix
-                # We can directly operate on 1x1 or 2x2 (complex) blocks of the block-diagonal matrix A
-                # Next, the inverse matrix can directly be calculated from the block-diagonal elements via 1/x
-                # Next, the multiplication with B does not need to be a matrix multiplication but can be done
-                # in a simple element-wise multiplication because F is diagonal!
-                # All of this saves a ton of memory because the sparse F matrix is never built and a ton of cpu.
+                # Size n_F0 of square matrix A0
+                n_F0 = np.size(F0, axis = 1)
+
                 if have_D:
-                    F0 = np.empty((n_samples, n_A0 + 1, 1), dtype=complex)
-                    F0[:, :-1] = \
-                        np.linalg.inv(s_eval[:, None, None] * np.identity(n_A0)[None, :, :] - A0[None, :, :]) @ B0[None, :, :]
-                    D_norm = np.linalg.norm(F0[:, :-1]) / (n_samples * n_A)
-                    F0[:, -1] = 1 * D_norm[None, None]
+                    F1 = np.empty((n_samples, n_F0 + 1), dtype=complex)
+                    D_norm = np.linalg.norm(F0) / (n_samples * n_F0)
+                    F1[:, :-1] = F0
+                    F1[:, -1] = 1 * D_norm[None, None]
                 else:
-                    F0 = np.linalg.inv(s_eval[:, None, None] * np.identity(n_A0)[None, :, :] - A0[None, :, :]) @ B0[None, :, :]
+                    F1 = F_view[i][j]
 
                 # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
-                F0_transpose = np.squeeze(F0)
+                F1_transpose = np.squeeze(F1)
 
                 # Build A_ls for the least squares problem A x = b
-                A_ls[i][j] = np.vstack((np.real(F0_transpose), np.imag(F0_transpose)))
+                A_ls[i][j] = np.vstack((np.real(F1_transpose), np.imag(F1_transpose)))
 
         # Iterative compensation of passivity violations
         iteration = 0
