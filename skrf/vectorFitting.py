@@ -3676,7 +3676,7 @@ class VectorFitting:
                         if perturb_constant:
                             D[i, j] -= x[-1] * D_norm[i][j]
                     else:
-                        C_view[i][j][:] = x
+                        C_view[i][j][:] -= x
 
             # Increment iteration counter
             iteration += 1
