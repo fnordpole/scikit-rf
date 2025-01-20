@@ -3514,6 +3514,9 @@ class VectorFitting:
         # Initialize A_ls as a two dimensional list with None for the least squares
         A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
 
+        # Initialize D_norm
+        D_norm = [x[:] for x in [[None] * n_ports] * n_ports]
+
         if verbose:
             if have_D and perturb_constant:
                 print('Perturbing residues and constant')
@@ -3532,9 +3535,9 @@ class VectorFitting:
                 # Build matrix F1 that contains F0 and optionally a row for D if we have it
                 if have_D:
                     F1 = np.empty((n_samples, n_F0 + 1), dtype=complex)
-                    D_norm = np.linalg.norm(F0) / (n_samples * n_F0)
+                    D_norm[i][j] = np.linalg.norm(F0) / (n_samples * n_F0)
                     F1[:, :-1] = F0
-                    F1[:, -1] = 1 * D_norm[None, None]
+                    F1[:, -1] = 1 * D_norm[i][j][None, None]
                 else:
                     F1 = F_view[i][j]
 
@@ -3606,7 +3609,7 @@ class VectorFitting:
                     if have_D:
                         C_view[i][j][:] -= x[:-1]
                         if perturb_constant:
-                            D[i, j] -= x[-1] * D_norm
+                            D[i, j] -= x[-1] * D_norm[i][j]
                     else:
                         C_view[i][j][:] = x
 
