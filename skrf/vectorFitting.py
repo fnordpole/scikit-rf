@@ -132,6 +132,7 @@ class VectorFitting:
 
         # Only complex poles are considered
         indices_poles_complex = np.nonzero(poles.imag != 0)[0]
+        indices_poles_real = np.nonzero(poles.imag == 0)[0]
 
         # Alle residues are considered
         n_responses=np.size(residues, axis=0)
@@ -144,11 +145,14 @@ class VectorFitting:
             return spurious
 
         # Define function for integration
-        def H(s, r, p):
+        def H_complex(s, r, p):
             return np.abs(r / (1j * s - p) + np.conj(r) / (1j * s - np.conj(p)))**2
+        def H_real(s, r, p):
+            return np.abs(r / (1j * s - p) )**2
 
         # Collects all norms
-        norm2 = np.empty((n_responses, len(indices_poles_complex)))
+        norm2_complex = np.zeros((n_responses, len(indices_poles_complex)))
+        norm2_real = np.zeros((n_responses, len(indices_poles_real)))
 
         # Run for debug plotting
         # import matplotlib.pyplot as plt
@@ -157,9 +161,9 @@ class VectorFitting:
         for i in range(len(indices_poles_complex)):
             for j in range(n_responses):
                 idx_pole_complex = indices_poles_complex[i]
-                y, err = integrate.quad(H, omega_poles_min / 3, omega_poles_max*3,
+                y, err = integrate.quad(H_complex, omega_poles_min / 3, omega_poles_max*3,
                                         args=(residues[j, idx_pole_complex], poles[idx_pole_complex]))
-                norm2[j, i] = np.sqrt(y)
+                norm2_complex[j, i] = np.sqrt(y)
 
                 # Plot what has been integrated for debug
                 # fig, ax = plt.subplots()
@@ -167,7 +171,25 @@ class VectorFitting:
                 # ax.plot(omega_eval, [f(s,residues[j, i], poles[i]) for s in omega_eval], linewidth=2.0)
                 # plt.show()
 
-        spurious[indices_poles_complex] = np.all(norm2 / np.mean(norm2) < spurious_pole_threshold, axis=0)
+        for i in range(len(indices_poles_real)):
+            for j in range(n_responses):
+                idx_pole_real = indices_poles_real[i]
+                y, err = integrate.quad(H_real, omega_poles_min / 3, omega_poles_max*3,
+                                        args=(residues[j, idx_pole_real], poles[idx_pole_real]))
+                norm2_real[j, i] = np.sqrt(y)
+
+                # Plot what has been integrated for debug
+                # fig, ax = plt.subplots()
+                # ax.grid()
+                # ax.plot(omega_eval, [f(s,residues[j, i], poles[i]) for s in omega_eval], linewidth=2.0)
+                # plt.show()
+
+        if len(indices_poles_real) > 0:
+            norm2_all = (np.mean(norm2_complex) + np.mean(norm2_real)) / 2
+        else:
+            norm2_all = np.mean(norm2_complex)
+
+        spurious[indices_poles_complex] = np.all(norm2_complex / norm2_all < spurious_pole_threshold, axis=0)
 
         return spurious
 
