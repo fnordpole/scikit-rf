@@ -1884,7 +1884,8 @@ class VectorFitting:
         rank_deficiency_A_dense = full_rank_A_dense - rank_A_dense
 
         # Calculate equivalents in stardard partial fraction form
-        C_tilde_equiv = np.copy(C_tilde)
+        # Squeeze to get a row vector
+        C_tilde_equiv = np.squeeze(np.copy(C_tilde))
         d_tilde_equiv = 1
         for i, pole in enumerate(poles):
             if np.imag(pole) == 0:
@@ -1903,16 +1904,12 @@ class VectorFitting:
         poles_complex = poles[idx_poles_complex]
 
         H[idx_real, idx_real] = poles_real.real
-
-        if len(idx_real) != 0:
-            H[idx_real] -= C_tilde_equiv / d_tilde_equiv
-
+        H[idx_real] -= C_tilde_equiv / d_tilde_equiv
         H[idx_complex_re, idx_complex_re] = poles_complex.real
         H[idx_complex_re, idx_complex_im] = poles_complex.imag
         H[idx_complex_im, idx_complex_re] = -1 * poles_complex.imag
         H[idx_complex_im, idx_complex_im] = poles_complex.real
-        if len(idx_complex_re) != 0:
-            H[idx_complex_re] -= 2 * C_tilde_equiv / d_tilde_equiv
+        H[idx_complex_re] -= 2 * C_tilde_equiv / d_tilde_equiv
 
         # Compute eigenvalues of H. These are the new poles.
         poles_new = np.linalg.eigvals(H)
