@@ -1890,12 +1890,12 @@ class VectorFitting:
         for i, pole in enumerate(poles):
             if np.imag(pole) == 0:
                 C_tilde_equiv[i] = C_tilde_equiv[i] * np.real(pole)
-                d_tilde_equiv += C_tilde_equiv[i]
+                d_tilde_equiv += C_tilde[i]
             else:
                 C = C_tilde_equiv[i] + 1j * C_tilde_equiv[i + 1]
                 C_tilde_equiv[i] = np.real(C * pole)
                 C_tilde_equiv[i + 1] = np.imag(C * pole)
-                d_tilde_equiv += 2 * C_tilde_equiv[i]
+                d_tilde_equiv += 2 * C_tilde[i]
 
         # Build H=A-BD^-1C^T
         H = np.zeros((len(C_tilde_equiv), len(C_tilde_equiv)))
