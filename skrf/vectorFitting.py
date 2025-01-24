@@ -455,7 +455,7 @@ class VectorFitting:
             logger.info(f'Iteration {iteration}')
 
             # Relocate poles
-            poles, d_tilde = self._relocate_poles(poles, omega, responses, weights, fit_constant,
+            poles, d_tilde = self._relocate_poles(poles, omega, responses, weights,
                                                   fit_proportional, memory_saver)
 
             # Check relative change of maximum singular value in A_dense stopping condition
@@ -468,8 +468,9 @@ class VectorFitting:
             # Check absolute error stopping condition only every 25 iterations
             if np.mod(iteration, 25) == 0:
                 # Fit residues with the previously calculated poles
-                residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                                      weights, fit_constant, fit_proportional)
+                residues, constant, proportional = self._fit_residues(
+                    poles, omega, responses, weights, fit_proportional)
+
                 # Calculate error_max
                 error_max = np.max(self._get_delta(poles, residues, constant, proportional, omega, responses, weights))
 
@@ -503,8 +504,7 @@ class VectorFitting:
             iteration += 1
 
         # Fit residues with the previously calculated poles
-        residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                              weights, fit_constant, fit_proportional)
+        residues, constant, proportional = self._fit_residues(poles, omega, responses, weights, fit_proportional)
 
         return poles, residues, constant, proportional
 
@@ -816,11 +816,11 @@ class VectorFitting:
         logger.info('Initial pole relocation')
         for _ in range(n_iterations_pre):
             poles, d_tilde = self._relocate_poles(poles, omega, responses, weights,
-                                                  fit_constant, fit_proportional, memory_saver)
+                                                  fit_proportional, memory_saver)
 
         # Fit residues
         residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                              weights, fit_constant, fit_proportional)
+                                                              weights, fit_proportional)
 
         # Calculate delta
         delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -866,11 +866,11 @@ class VectorFitting:
             logger.info('Intermediate pole relocation')
             for _ in range(n_iterations):
                 poles, d_tilde, = self._relocate_poles(poles, omega, responses, weights,
-                                                       fit_constant, fit_proportional, memory_saver)
+                                                       fit_proportional, memory_saver)
 
             # Fit residues
             residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                                  weights, fit_constant, fit_proportional)
+                                                                  weights, fit_proportional)
 
             # Calculate delta
             delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -913,11 +913,11 @@ class VectorFitting:
         # Final pole relocation
         for _ in range(n_iterations_post):
             poles, d_tilde = self._relocate_poles(poles, omega, responses, weights,
-                                                  fit_constant, fit_proportional, memory_saver)
+                                                  fit_proportional, memory_saver)
 
         # Final residue fitting
         residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                              weights, fit_constant, fit_proportional)
+                                                              weights, fit_proportional)
 
         return poles, residues, constant, proportional
 
@@ -1543,7 +1543,7 @@ class VectorFitting:
         # Convert back to np array and return
         return np.array(poles)
 
-    def _relocate_poles(self, poles, omega, responses, weights, fit_constant, fit_proportional, memory_saver):
+    def _relocate_poles(self, poles, omega, responses, weights, fit_proportional, memory_saver):
         n_responses, n_freqs = np.shape(responses)
         n_samples = n_responses * n_freqs
         s = 1j * omega
@@ -1578,16 +1578,16 @@ class VectorFitting:
         # and   Xkj := s (for j=n_poles+2* and for all k) (only if fit_constant == True and fit_proportional == True)
         # and   Xkj := s (for j=n_poles+1* and for all k) (only if fit_constant == False and fit_proportional == True)
 
-        # Y := rational basis functions with size n_freqs x (n_poles+1)
+        # X~ := rational basis functions with size n_freqs x (n_poles+1)
         #       Xkj := 1/(sk-aj) (for j=1..n_poles and for all k)
         # and   Xkj := 1 (for j=n_poles+1 and for all k) (only if fit_constant == True)
         # The Y represent the rational basis functions of sigma(s) including
         # all the same poles as in X, but only one extra element for the d~ term,
         # which is always present. The e term does not go into sigma(s).
 
-        # If fit_proportional == False and fit_constant == True, X==Y.
+        # If fit_proportional == False and fit_constant == True, X==X~.
         # In all other cases, only the rational basis functions will be the
-        # same for X and Y.
+        # same for X and X~.
 
         #
         # Wi := weights: diag(wi1,...wi_n_freqs)
@@ -1723,28 +1723,23 @@ class VectorFitting:
         idx_poles_complex = np.nonzero(poles.imag != 0)[0]
 
         # Initialize number of elements in C
-        n_C=n_poles
-
-        # Get index of constant term if we have it
-        if fit_constant:
-            idx_const = [n_C]
-            n_C += 1
+        n_C = n_poles
 
         # Get index of proportional term if we have it
         if fit_proportional:
             idx_prop = [n_C]
             n_C += 1
 
-        # Number of elements in C~=C_tilde
-        n_C_tilde = n_poles + 1
+        # Number of elements in C~ = C_tilde
+        n_C_tilde = n_poles
 
         # Build components of rational basis functions (RBF)
-        rbf_real = 1 / (s[:, None] - poles[None, idx_poles_real])
+        rbf_real = s[:, None] / (s[:, None] - poles[None, idx_poles_real])
 
-        rbf_complex_re = (1 / (s[:, None] - poles[None, idx_poles_complex]) +
-                            1 / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
-        rbf_complex_im = (1j / (s[:, None] - poles[None, idx_poles_complex]) -
-                            1j / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+        rbf_complex_re = (s[:, None] / (s[:, None] - poles[None, idx_poles_complex]) +
+                            s[:, None] / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+        rbf_complex_im = ((1j * s[:, None]) / (s[:, None] - poles[None, idx_poles_complex]) -
+                            (1j * s[:, None]) / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
 
         n_real = len(idx_poles_real)
         n_cmplx = len(idx_poles_complex)
@@ -1753,11 +1748,14 @@ class VectorFitting:
         idx_complex_im = idx_complex_re + 1
 
         # Calculate n_rows of R22
-        K=min(n_freqs * 2, n_C + n_C_tilde)
-        n_rows_R22=K-n_C
+        K = min(n_freqs * 2, n_C + n_C_tilde)
+        n_rows_R22 = K - n_C
 
         # Initialize R22
-        R22=np.empty((n_responses, n_rows_R22, n_C_tilde))
+        R22 = np.empty((n_responses, n_rows_R22, n_C_tilde))
+
+        # Initialize RHS = Q^T (H-d)
+        RHS = np.empty((n_responses, n_rows_R22))
 
         if not memory_saver:
             # We build all rows of A at once and run the QR factorization using
@@ -1776,8 +1774,7 @@ class VectorFitting:
             A[:, :, idx_real] = weights[:, :, None] * rbf_real[None, :, :]
             A[:, :, idx_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
             A[:, :, idx_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
-            if fit_constant:
-                A[:, :, idx_const] = 1 * weights[:, :, None]
+
             if fit_proportional:
                 A[:, :, idx_prop] = weights[:, :, None] * s[None, :, None]
 
@@ -1787,7 +1784,6 @@ class VectorFitting:
                 -1 * weights[:, :, None] * rbf_complex_re[None, :, :] * responses[:, :, None]
             A[:, :, n_C + idx_complex_im] = \
                 -1 * weights[:, :, None] * rbf_complex_im[None, :, :] * responses[:, :, None]
-            A[:, :, -1] = -1 * weights[:, :] * responses[:, :]
 
             # The numpy QR decomposition in mode 'r' will be A = Q R
             # size A=M, N then size R=min(M,N), N
@@ -1817,10 +1813,20 @@ class VectorFitting:
             # complex C_tilde and it would be impossible to convert it back to
             # real only because (a+jb)*(c+jd)=ac-bd+j(bc+ad) so all the parts
             # are mixed up between A and x in the solution.
-            R = np.linalg.qr(np.hstack((A.real, A.imag)), 'r')
+            Q, R = np.linalg.qr(np.hstack((A.real, A.imag)), 'reduced')
 
             # Get R22
-            R22=R[:, n_C:, n_C:]
+            R22 = R[:, n_C:, n_C:]
+
+            # Get Q2. Q = [Q1 Q2] is shape n_responses, 2 * n_freqs, K
+            Q2 = Q[:, :, n_C:]
+
+            # Calculate RHS: TODO: What if we have no DC!!!
+            H_DC = weights[:, 0] * responses[:, 0]
+            H = weights * responses[:, :] - H_DC[:, None]
+            H = np.hstack((np.real(H), np.imag(H)))
+            H = np.expand_dims(H, 2)
+            RHS = np.transpose(Q2, axes = (0, 2, 1)) @ H
 
         # Memory saver: Run in serial for each response. The code is essentially
         # the same as above. See comments above for comments on the code.
@@ -1832,8 +1838,6 @@ class VectorFitting:
                 A[:, idx_real] = weights[i, :, None] * rbf_real[None, :, :]
                 A[:, idx_complex_re] = weights[i, :, None] * rbf_complex_re[None, :, :]
                 A[:, idx_complex_im] = weights[i, :, None] * rbf_complex_im[None, :, :]
-                if fit_constant:
-                    A[:, idx_const] = 1 * weights[i, :, None]
                 if fit_proportional:
                     A[:, idx_prop] = weights[i, :, None] * s[None, :, None]
 
@@ -1843,37 +1847,30 @@ class VectorFitting:
                     -1 * weights[i, :, None] * rbf_complex_re[None, :, :] * responses[i, :, None]
                 A[:, n_C + idx_complex_im] = \
                     -1 * weights[i, :, None] * rbf_complex_im[None, :, :] * responses[i, :, None]
-                A[:, -1] = -1 * weights[i, :] * responses[i, :]
 
                 # QR decomposition. Note: Here we have to use vstack instead of hstack
                 # to stack in the first dimension (freq).
                 R = np.linalg.qr(np.vstack((A.real, A.imag)), 'r')
 
                 # Get R22
-                R22[i]=R[n_C:, n_C:]
+                R22[i] = R[n_C:, n_C:]
+
+                # Get Q2. Q = [Q1 Q2] is shape 2 * n_freqs, K
+                Q2 = Q[:, n_C:]
+
+                # Calculate RHS: TODO: What if we have no DC!!!
+                H = weights[i, :] * responses[i, :] - weights[i, 0] * responses[i, 0]
+                H = np.transpose(Q2, axes = (1, 0)) @ H
+                RHS[i] = np.hstack(np.real(H), np.imag(H))
 
         # Build A_dense. This is the representation of the initial big system
         # matrix A with the sparsity and the unused C terms removed.
-        A_dense = np.empty((n_responses * n_rows_R22 + 1, n_C_tilde))
-        A_dense[:-1,:] = R22.reshape((n_responses * n_rows_R22, n_C_tilde))
+        A_dense = np.empty((n_responses * n_rows_R22, n_C_tilde))
+        A_dense = R22.reshape((n_responses * n_rows_R22, n_C_tilde))
 
-        # The extra equation is weighted such that its influence in the least
-        # squares is equal to all other equations. In the original Gustavsen
-        # VF-Relaxed paper, norm(H)/(n_responses*n_freqs) is used.
-        weight_extra = np.linalg.norm(responses*weights) / np.size(responses)
-
-        # Extra equation for d~
-        A_dense[-1, idx_real] = weight_extra * np.sum(rbf_real.real, axis=0)
-        A_dense[-1, idx_complex_re] = weight_extra * np.sum(rbf_complex_re.real, axis=0)
-        A_dense[-1, idx_complex_im] = weight_extra * np.sum(rbf_complex_im.real, axis=0)
-        A_dense[-1, -1] = weight_extra * n_freqs # Results from summing a 1 over n_freqs
-
-        d_tilde_norm=np.linalg.norm(A_dense[:, :-1])/(np.size(A_dense, axis=0)*(np.size(A_dense, axis=1)-1))
-        A_dense[:, -1]*=d_tilde_norm
-
-        # Right hand side b_dense
-        b_dense = np.zeros(n_responses * n_rows_R22 + 1)
-        b_dense[-1] = weight_extra * n_samples
+        # Build right hand side b_dense
+        b_dense = np.empty(n_responses * n_rows_R22)
+        b_dense = RHS.reshape((-1, 1))
 
         # Condition number of the linear system
         cond_A_dense = np.linalg.cond(A_dense)
@@ -1886,47 +1883,36 @@ class VectorFitting:
         full_rank_A_dense = np.min(A_dense.shape)
         rank_deficiency_A_dense = full_rank_A_dense - rank_A_dense
 
+        # Calculate equivalents in stardard partial fraction form
+        C_tilde_equiv = np.copy(C_tilde)
+        d_tilde_equiv = 1
+        for i, pole in enumerate(poles):
+            if np.imag(pole) == 0:
+                C_tilde_equiv[i] = C_tilde_equiv[i] * np.real(pole)
+                d_tilde_equiv += C_tilde_equiv[i]
+            else:
+                C = C_tilde_equiv[i] + 1j * C_tilde_equiv[i + 1]
+                C_tilde_equiv[i] = np.real(C * pole)
+                C_tilde_equiv[i + 1] = np.imag(C * pole)
+                d_tilde_equiv += 2 * C_tilde_equiv[i]
+
         # Build H=A-BD^-1C^T
-        d_tilde = C_tilde[-1]*d_tilde_norm
-        C_tilde = C_tilde[:-1]
-
-        # Check whether d_tilde is suited for zeros calculation
-        # The tolerance suggested in the original VF-Relaxed paper from
-        # Gustavsen is tol_d_tilde_low=1e-8 but in the example code from Gustavsen
-        # 1e-18 is used. Additionally, in the example code, a high tol of 1e18
-        # is implemented.
-        tol_d_tilde_low=1e-18
-        tol_d_tilde_high=1e18
-
-        if np.abs(d_tilde) < tol_d_tilde_low:
-            raise RuntimeError('Pole relocation failed because d_tilde is too small')
-            # In this case we will do a non-relaxed vector-fitting with a fixed
-            # d~. We have to completely build a new big system and run all the
-            # process with QR factorization and A_dense building and solving again
-            # and obtain a new C_tilde and d_tilde. This is not yet implemented so we
-            # fail with error.
-            # Fixed d_tilde to be used in non-relaxed VF:
-            # d_tilde = tol_d_tilde_low * (d_tilde / np.abs(d_tilde))
-
-        if np.abs(d_tilde) > tol_d_tilde_high:
-            raise RuntimeError('Pole relocation failed because d_tilde is too large')
-            # Fixed d_tilde to be used in non-relaxed VF:
-            # d_tilde = tol_d_tilde_high * (d_tilde / np.abs(d_tilde))
-
-        # Build H
-        H = np.zeros((len(C_tilde), len(C_tilde)))
+        H = np.zeros((len(C_tilde_equiv), len(C_tilde_equiv)))
 
         poles_real = poles[idx_poles_real]
         poles_complex = poles[idx_poles_complex]
 
         H[idx_real, idx_real] = poles_real.real
-        H[idx_real] -= C_tilde / d_tilde
+
+        if len(idx_real) != 0:
+            H[idx_real] -= C_tilde_equiv / d_tilde_equiv
 
         H[idx_complex_re, idx_complex_re] = poles_complex.real
         H[idx_complex_re, idx_complex_im] = poles_complex.imag
         H[idx_complex_im, idx_complex_re] = -1 * poles_complex.imag
         H[idx_complex_im, idx_complex_im] = poles_complex.real
-        H[idx_complex_re] -= 2 * C_tilde / d_tilde
+        if len(idx_complex_re) != 0:
+            H[idx_complex_re] -= 2 * C_tilde_equiv / d_tilde_equiv
 
         # Compute eigenvalues of H. These are the new poles.
         poles_new = np.linalg.eigvals(H)
@@ -1939,7 +1925,7 @@ class VectorFitting:
         poles.real = -1 * np.abs(poles.real)
 
         # Append convergence metrics to history
-        self.d_tilde_history.append(d_tilde)
+        self.d_tilde_history.append(d_tilde_equiv)
         self.history_cond_A_dense.append(cond_A_dense)
         self.history_rank_deficiency_A_dense.append(rank_deficiency_A_dense)
 
@@ -1958,9 +1944,9 @@ class VectorFitting:
         logger.info(f'PoleRelocation: Cond = {cond_A_dense:.1e} RankDeficiency = {rank_deficiency_A_dense} '
                     f'dRelMaxSv = {delta_rel_max_singular_value_A_dense:.4e}')
 
-        return poles, d_tilde
+        return poles, d_tilde_equiv
 
-    def _fit_residues(self, poles, omega, responses, weights, fit_constant, fit_proportional):
+    def _fit_residues(self, poles, omega, responses, weights, fit_proportional):
         n_responses, n_freqs = np.shape(responses)
         s = 1j * omega
 
@@ -1974,12 +1960,7 @@ class VectorFitting:
         idx_poles_complex = np.nonzero(poles.imag != 0)[0]
 
         # Initialize number of elements in C
-        n_C=n_poles
-
-        # Get index of constant term if we have it
-        if fit_constant:
-            idx_const = [n_C]
-            n_C += 1
+        n_C = n_poles
 
         # Get index of proportional term if we have it
         if fit_proportional:
@@ -1987,13 +1968,12 @@ class VectorFitting:
             n_C += 1
 
         # Build  components of RBF
-        rbf_real = 1 / (s[:, None] - poles[None, idx_poles_real])
+        rbf_real = s[:, None] / (s[:, None] - poles[None, idx_poles_real])
 
-        rbf_complex_re = (1 / (s[:, None] - poles[None, idx_poles_complex]) +
-                            1 / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
-
-        rbf_complex_im = (1j / (s[:, None] - poles[None, idx_poles_complex]) -
-                            1j / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+        rbf_complex_re = (s[:, None] / (s[:, None] - poles[None, idx_poles_complex]) +
+                            s[:, None] / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+        rbf_complex_im = ((1j * s[:, None]) / (s[:, None] - poles[None, idx_poles_complex]) -
+                            (1j * s[:, None]) / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
 
         n_real = len(idx_poles_real)
         n_cmplx = len(idx_poles_complex)
@@ -2009,21 +1989,17 @@ class VectorFitting:
         A[:, :, idx_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
         A[:, :, idx_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
 
-        if fit_constant:
-            d_norm=np.empty(n_responses)
-            d_norm[:]=np.asarray(
-                [np.linalg.norm(A[i, :, :idx_const[0]-1]) / (n_freqs*(idx_const[0])) for i in range(n_responses)])
-            A[:, :, idx_const] = 1 * d_norm[:, None, None] * weights[:, :, None]
-
         if fit_proportional:
             d_norm=np.empty(n_responses)
             d_norm[:]=np.asarray(
-                [np.linalg.norm(A[i, :, :idx_const[0]-1])/(n_freqs*(idx_const[0])) for i in range(n_responses)])
+                [np.linalg.norm(A[i, :, :idx_prop[0]-1])/(n_freqs*(idx_prop[0])) for i in range(n_responses)])
+
             e_norm=d_norm/(np.linalg.norm(s)/n_freqs)
             A[:, :, idx_prop] = e_norm[:, None, None] * weights[:, :, None] * s[None, :, None]
 
         # Build responses_weigthed
-        responses_weighted=responses*weights
+        responses_dc = responses[:, 0] * weights[:, 0]
+        responses_weighted=responses * weights - responses_dc[:, None]
 
         # Solve for C with least squares for every response
         x = np.empty((n_responses, n_C))
@@ -2039,14 +2015,14 @@ class VectorFitting:
 
         # Extract residues from solution vector and align them with poles to get matching pole-residue pairs
         residues = np.empty((len(responses), len(poles)), dtype=complex)
-        residues[:, idx_poles_real] = x[:, idx_real]
-        residues[:, idx_poles_complex] = x[:, idx_complex_re] + 1j * x[:, idx_complex_im]
 
-        # Extract constant if we have it
-        if fit_constant:
-            constant = np.matrix.flatten(x[:, idx_const]) * d_norm
-        else:
-            constant = np.zeros(n_responses)
+        # Calculate equivalents in stardard partial fraction form
+        residues[:, idx_poles_real] = x[:, idx_real] * np.real(poles[idx_poles_real])
+        residues[:, idx_poles_complex] = (x[:, idx_complex_re] + 1j * x[:, idx_complex_im]) * poles[idx_poles_complex]
+
+        constant = np.real(responses[:, 0]) + \
+            np.sum(np.real(residues[:, idx_poles_real]), axis = 1) + \
+            2 * np.sum(np.real(residues[:, idx_poles_complex]), axis = 1)
 
         if fit_proportional:
             proportional = np.matrix.flatten(x[:, idx_prop]) * e_norm
