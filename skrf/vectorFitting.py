@@ -1995,8 +1995,8 @@ class VectorFitting:
             A[:, :, idx_prop] = e_norm[:, None, None] * weights[:, :, None] * s[None, :, None]
 
         # Build responses_weigthed
-        responses_dc = responses[:, 0] * weights[:, 0]
-        responses_weighted=responses * weights - responses_dc[:, None]
+        responses_weighted_dc = responses[:, 0] * weights[:, 0]
+        responses_weighted=responses * weights - responses_weighted_dc[:, None]
 
         # Solve for C with least squares for every response
         x = np.empty((n_responses, n_C))
@@ -2018,8 +2018,8 @@ class VectorFitting:
         residues[:, idx_poles_complex] = (x[:, idx_complex_re] + 1j * x[:, idx_complex_im]) * poles[idx_poles_complex]
 
         constant = np.real(responses[:, 0]) + \
-            np.sum(np.real(residues[:, idx_poles_real]), axis = 1) + \
-            2 * np.sum(np.real(residues[:, idx_poles_complex]), axis = 1)
+            np.sum(np.real(x[:, idx_real]), axis = 1) + \
+            2 * np.sum(np.real(x[:, idx_complex_re]), axis = 1)
 
         if fit_proportional:
             proportional = np.matrix.flatten(x[:, idx_prop]) * e_norm
