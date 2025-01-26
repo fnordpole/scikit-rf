@@ -2794,9 +2794,9 @@ class VectorFitting:
             for idx_pole_group in sorted_unique_indices_pole_groups:
                 poles = self.poles[idx_pole_group]
                 residues = self.residues[idx_pole_group]
-                residues_modified = self.residues[idx_pole_group]
+                residues_modified = self.residues_modified[idx_pole_group]
                 constant = self.constant[idx_pole_group]
-                constant_modified = self.constant[idx_pole_group]
+                constant_modified = self.constant_modified[idx_pole_group]
                 proportional = self.proportional[idx_pole_group]
 
                 # Create contribution of this pole group into A and B
