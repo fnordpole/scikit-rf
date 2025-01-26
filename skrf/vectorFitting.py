@@ -2028,14 +2028,14 @@ class VectorFitting:
         residues[:, idx_poles_real] = x[:, idx_real] * np.real(poles[idx_poles_real])
         residues[:, idx_poles_complex] = (x[:, idx_complex_re] + 1j * x[:, idx_complex_im]) * poles[idx_poles_complex]
 
+        # Residues in modified vf form
+        residues_modified[:, idx_poles_real] = x[:, idx_real]
+        residues_modified[:, idx_poles_complex] = x[:, idx_complex_re] + 1j * x[:, idx_complex_im]
+
         # Constant in standard partial fraction form
         constant = np.real(responses[:, 0]) + \
             np.sum(np.real(x[:, idx_real]), axis = 1) + \
             2 * np.sum(np.real(x[:, idx_complex_re]), axis = 1)
-
-        # Residues in modified vf form
-        residues_modified[:, idx_poles_real] = x[:, idx_real]
-        residues_modified[:, idx_poles_complex] = x[:, idx_complex_re] + 1j * x[:, idx_complex_im]
 
         # Constant in modified vf form
         constant_modified = np.real(responses[:, 0])
@@ -4027,22 +4027,23 @@ class VectorFitting:
             gamma = 0.01 # Regularization weight for smoothness
 
             # Define cost function
-            def cost_function(C_flat):
+            def cost_function(C_modified_flat):
                 # Reshape the flat C vector into matrix form
-                C = C_flat.reshape(S_viol.shape)
+                # TODO: Account for views!!
+                _C_modified = C_modified_flat.reshape(S_viol.shape)
 
                 # Compute the reconstructed S_viol from C and B
-                S_viol_reconstructed = C @ B
+                S_viol_reconstructed = _C_modified @ B
 
                 # Fidelity to the equation S_viol = C * B
                 fidelity_term = alpha * np.linalg.norm(S_viol - S_viol_reconstructed, ord='fro')**2
 
                 # Deviation from the original S matrix (all frequencies)
-                S_modified = C @ F + D  # Assuming passivity adjustments
+                S_modified = _C_modified @ F_modified + D_modified  # Assuming passivity adjustments
                 deviation_term = beta * np.linalg.norm(S_original - S_modified, ord='fro')**2
 
                 # Regularization for smoothness
-                regularization_term = gamma * np.linalg.norm(C, ord='fro')**2
+                regularization_term = gamma * np.linalg.norm(_C_modified, ord='fro')**2
 
                 return fidelity_term + deviation_term + regularization_term
 
@@ -4062,8 +4063,8 @@ class VectorFitting:
             #     return np.min(eigenvalues)
 
             # Flatten the initial guess for C
-            C_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
-            C_initial_flat = C_initial.flatten()
+            C_modified_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
+            C_modified_initial_flat = C_modified_initial.flatten()
 
             # Constraints
             # constraints = {
@@ -4074,21 +4075,21 @@ class VectorFitting:
             # Optimization
             result = minimize(
                 fun=cost_function,
-                x0=C_initial_flat,
+                x0=C_modified_initial_flat,
                 #constraints=constraints,
                 method='SLSQP',  # Sequential Least Squares Programming
                 options={'disp': True}
             )
 
             # Extract optimized C_viol
-            C_viol_optimized = result.x.reshape(S_viol.shape)
+            C_modified_viol_optimized = result.x.reshape(S_viol.shape)
 
             # Output Results
             print("Optimized C_viol:")
-            print(C_viol_optimized)
+            print(C_modified_viol_optimized)
 
             # Calculate S_viol
-            S_viol_optimized = C_viol_optimized @ B
+            S_viol_optimized = C_modified_viol_optimized @ B
 
             # Singular value decomposition
             u, sigma, vh = np.linalg.svd(S_viol_optimized, full_matrices=False)
@@ -4100,7 +4101,7 @@ class VectorFitting:
 
             # Calculate C_asymp and subtract from C_modified
             # TODO: Fix views and flattening while optimizing.
-            C_modified -= C_viol_optimized
+            C_modified -= C_modified_viol_optimized
 
         # TODO: Return if passive
 
