@@ -10,6 +10,7 @@ import numpy as np
 from scipy import integrate
 from scipy.signal import find_peaks
 from scipy.linalg import issymmetric
+from scipy.optimize import minimize
 
 from .util import Axes, axes_kwarg
 
@@ -423,13 +424,14 @@ class VectorFitting:
                 poles = poles_init[idx_pole_group]
 
             # Call _vector_fit
-            poles, residues, constant, proportional = self._vector_fit(
+            poles, residues, residues_modified, constant, constant_modified, proportional = self._vector_fit(
                 poles, omega, responses[indices_responses], weights[indices_responses],
                 fit_constant, fit_proportional, memory_saver,
                 max_iterations, stagnation_threshold, abstol)
 
             # Save results
-            self._save_results(poles, residues, constant, proportional, idx_pole_group)
+            self._save_results(
+                poles, residues, residues_modified, constant, constant_modified, proportional, idx_pole_group)
 
             logger.info(f'Finished vector_fit for pole group {idx_pole_group+1} of {n_pole_groups}')
 
@@ -468,7 +470,7 @@ class VectorFitting:
             # Check absolute error stopping condition only every 25 iterations
             if np.mod(iteration, 25) == 0:
                 # Fit residues with the previously calculated poles
-                residues, constant, proportional = self._fit_residues(
+                residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
                     poles, omega, responses, weights, fit_proportional)
 
                 # Calculate error_max
@@ -504,9 +506,10 @@ class VectorFitting:
             iteration += 1
 
         # Fit residues with the previously calculated poles
-        residues, constant, proportional = self._fit_residues(poles, omega, responses, weights, fit_proportional)
+        residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
+            poles, omega, responses, weights, fit_proportional)
 
-        return poles, residues, constant, proportional
+        return poles, residues, residues_modified, constant, constant_modified, proportional
 
     def auto_fit(self,
                  # Initial poles
@@ -783,7 +786,7 @@ class VectorFitting:
                 n_poles_add_max = saved_n_poles_add_max
 
             # Call _auto_fit
-            poles, residues, constant, proportional = self._auto_fit(
+            poles, residues, residues_modified, constant, constant_modified, proportional = self._auto_fit(
                 poles, omega, responses[indices_responses], weights[indices_responses],
                 fit_constant, fit_proportional, memory_saver,
                 n_iterations_pre, n_iterations, n_iterations_post,
@@ -791,7 +794,8 @@ class VectorFitting:
                 abstol, model_order_max, n_poles_add_max)
 
             # Save results
-            self._save_results(poles, residues, constant, proportional, idx_pole_group)
+            self._save_results(
+                poles, residues, residues_modified, constant, constant_modified, proportional, idx_pole_group)
 
             logger.info(f'Finished auto_fit for pole group {idx_pole_group+1} of {n_pole_groups}')
 
@@ -819,8 +823,8 @@ class VectorFitting:
                                                   fit_proportional, memory_saver)
 
         # Fit residues
-        residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                              weights, fit_proportional)
+        residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
+            poles, omega, responses, weights, fit_proportional)
 
         # Calculate delta
         delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -869,8 +873,8 @@ class VectorFitting:
                                                        fit_proportional, memory_saver)
 
             # Fit residues
-            residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                                  weights, fit_proportional)
+            residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
+                poles, omega, responses, weights, fit_proportional)
 
             # Calculate delta
             delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -916,10 +920,10 @@ class VectorFitting:
                                                   fit_proportional, memory_saver)
 
         # Final residue fitting
-        residues, constant, proportional = self._fit_residues(poles, omega, responses,
-                                                              weights, fit_proportional)
+        residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
+            poles, omega, responses, weights, fit_proportional)
 
-        return poles, residues, constant, proportional
+        return poles, residues, residues_modified, constant, constant_modified, proportional
 
     def _init_pole_sharing(self, pole_sharing, n_responses, pole_groups):
         # Initializes all data structures needed for pole sharing
@@ -1008,7 +1012,9 @@ class VectorFitting:
         # Initialize data structures for results
         self.poles = [None] * n_pole_groups
         self.residues = [None] * n_pole_groups
+        self.residues_modified = [None] * n_pole_groups
         self.constant = [None] * n_pole_groups
+        self.constant_modified = [None] * n_pole_groups
         self.proportional = [None] * n_pole_groups
 
     @staticmethod
@@ -1217,11 +1223,15 @@ class VectorFitting:
 
         return n_poles_complex
 
-    def _save_results(self, poles, residues, constant, proportional, idx_pole_group):
+    def _save_results(self,
+        poles, residues, residues_modified, constant, constant_modified, proportional, idx_pole_group):
         # Saves the results
+
         self.poles[idx_pole_group] = poles
         self.residues[idx_pole_group] = residues
+        self.residues_modified[idx_pole_group] = residues_modified
         self.constant[idx_pole_group] = constant
+        self.constant_modified[idx_pole_group] = constant_modified
         self.proportional[idx_pole_group] = proportional
 
     def get_n_poles_real(self, idx_pole_group = None) -> int:
@@ -1545,7 +1555,6 @@ class VectorFitting:
 
     def _relocate_poles(self, poles, omega, responses, weights, fit_proportional, memory_saver):
         n_responses, n_freqs = np.shape(responses)
-        n_samples = n_responses * n_freqs
         s = 1j * omega
 
         # In general, we have one "big" system Ax=b, in which the solution
@@ -2010,23 +2019,33 @@ class VectorFitting:
             # Append solution vector to x
             x[i] = xi
 
-        # Extract residues from solution vector and align them with poles to get matching pole-residue pairs
+        # Residues holds the residues in standard partial fraction form, while residues_modified holds the gammas
+        # from the numerator of the partial fractions that are multiplied by s in the modified vf form.
         residues = np.empty((len(responses), len(poles)), dtype=complex)
+        residues_modified = np.empty((len(responses), len(poles)), dtype=complex)
 
-        # Calculate equivalents in stardard partial fraction form
+        # Residues in stardard partial fraction form
         residues[:, idx_poles_real] = x[:, idx_real] * np.real(poles[idx_poles_real])
         residues[:, idx_poles_complex] = (x[:, idx_complex_re] + 1j * x[:, idx_complex_im]) * poles[idx_poles_complex]
 
+        # Constant in standard partial fraction form
         constant = np.real(responses[:, 0]) + \
             np.sum(np.real(x[:, idx_real]), axis = 1) + \
             2 * np.sum(np.real(x[:, idx_complex_re]), axis = 1)
+
+        # Residues in modified vf form
+        residues_modified[:, idx_poles_real] = x[:, idx_real]
+        residues_modified[:, idx_poles_complex] = x[:, idx_complex_re] + 1j * x[:, idx_complex_im]
+
+        # Constant in modified vf form
+        constant_modified = np.real(responses[:, 0])
 
         if fit_proportional:
             proportional = np.matrix.flatten(x[:, idx_prop]) * e_norm
         else:
             proportional = np.zeros(n_responses)
 
-        return residues, constant, proportional
+        return residues, residues_modified, constant, constant_modified, proportional
 
     @staticmethod
     def _get_delta(poles, residues, constant, proportional, omega, responses, weights):
@@ -2694,6 +2713,162 @@ class VectorFitting:
             return F, C, D, E, F_view, C_view
         else:
             return F, C, D, E
+
+    def _get_state_space_FABCDE(self, s, create_views = False, create_modified = False,
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        # Creates the state space matrix F=(sI-A)^-1 B and C, D, E
+
+        # Input argument s is an array of complex frequencies s = 1j * omega for which F is built.
+
+        # In the calculation of F no direct inversion is used and the diagonality properties are
+        # used to efficiently invert it. Also the matrix multiplication with B is efficiently calculated
+        # as an element wise multiplication instead. This is possible because also the inverted matrix is diagonal.
+
+        # Get total number of ports including all pole groups
+        n_ports = self._get_n_ports()
+
+        # Get number of frequencies
+        n_freqs = np.size(s, axis = 0)
+
+        # Get n_responses
+        n_responses = n_ports * n_ports
+
+        # These views enable easy accesss to the submatrices
+        F_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        A_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        B_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        C_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        C_modified_view = [x[:] for x in [[None] * n_ports] * n_ports]
+
+        # Get model orders for every pole group
+        model_orders=np.array([self.get_model_order(x) for x in range(len(self.poles))])
+
+        # For every big column of C we need to find the number of subcolumns
+        n_subcolumns_in_columns_of_C = np.empty((n_ports))
+        # Working column wise: j'th column:
+        for j in range(n_ports):
+            # Get indices of the responses of the first column S11, S21, S31, ...
+            indices_responses = j + np.arange(0, n_responses, n_ports)
+            # Get pole group of every response
+            indices_pole_groups = self.map_idx_response_to_idx_pole_group[indices_responses]
+            # Get sorted unique pole groups
+            sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
+            # Get total model order for column
+            model_order_column = int(np.sum(model_orders[sorted_unique_indices_pole_groups]))
+            # Save
+            n_subcolumns_in_columns_of_C[j] = model_order_column
+
+        # Create empty output matrices
+        n_A = int(np.sum(n_subcolumns_in_columns_of_C))
+        F = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
+        A = np.zeros(shape=(n_A, n_A))
+        B = np.zeros(shape=(n_A, n_ports))
+        C = np.zeros(shape=(n_ports, n_A))
+        C_modified = np.zeros(shape=(n_ports, n_A))
+        D = np.zeros(shape=(n_ports, n_ports))
+        D_modified = np.zeros(shape=(n_ports, n_ports))
+        E = np.zeros(shape=(n_ports, n_ports))
+
+        # Index on diagonal of A
+        idx_diag_A = 0
+        # Column offset of the columns of C
+        offset_col_C = 0
+        # Working column wise for every big column j of C:
+        for j in range(n_ports):
+            # Get indices of the responses of the first column S11, S21, S31, ...
+            indices_responses = j + np.arange(0, n_responses, n_ports)
+            # Get pole group of every response
+            indices_pole_groups = self.map_idx_response_to_idx_pole_group[indices_responses]
+            # Get sorted unique pole groups
+            sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
+            # Get number of poles for every unique pole group
+            model_orders_per_group = [self.get_model_order(x) for x in sorted_unique_indices_pole_groups]
+            # Get total model order for column
+            model_order_column = np.sum(model_orders_per_group)
+            # Create dict mapping sorted_unique_indices_pole_groups to i (row index)
+            map_sorted_unique_indices_pole_groups_to_i = \
+                {x: np.nonzero(indices_pole_groups == x)[0] for x in sorted_unique_indices_pole_groups}
+
+            # Work pole-group-wise
+            for idx_pole_group in sorted_unique_indices_pole_groups:
+                poles = self.poles[idx_pole_group]
+                residues = self.residues[idx_pole_group]
+                residues_modified = self.residues[idx_pole_group]
+                constant = self.constant[idx_pole_group]
+                constant_modified = self.constant[idx_pole_group]
+                proportional = self.proportional[idx_pole_group]
+
+                # Create contribution of this pole group into A and B
+                for pole in poles:
+                    if np.imag(pole) == 0.0:
+                        # Real pole
+                        F[:, idx_diag_A, j] = 1 / (s - np.real(pole))
+                        A[idx_diag_A, idx_diag_A] = np.real(pole)
+                        B[idx_diag_A, j] = 1
+                        idx_diag_A += 1
+                    else:
+                        # Complex-conjugate pole
+                        denom = (s - np.real(pole))**2 + np.imag(pole)**2
+                        F[:, idx_diag_A, j] = 2 * (s - np.real(pole)) / denom
+                        F[:, idx_diag_A + 1, j] = -2 * np.imag(pole) / denom
+                        A[idx_diag_A, idx_diag_A] = np.real(pole)
+                        A[idx_diag_A, idx_diag_A + 1] = np.imag(pole)
+                        A[idx_diag_A + 1, idx_diag_A] = -1 * np.imag(pole)
+                        A[idx_diag_A + 1, idx_diag_A + 1] = np.real(pole)
+                        B[idx_diag_A, j] = 2
+                        idx_diag_A += 2
+
+                # Process all responses that are part of this pole group
+                for i in map_sorted_unique_indices_pole_groups_to_i[idx_pole_group]:
+                    # Get idx_response
+                    idx_response = j + n_ports * i
+                    idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
+
+                    # Initialize idx_col_C to offset_col_C
+                    idx_col_C = offset_col_C
+                    for i in range(len(residues[idx_pole_group_member])):
+                        residue = residues[idx_pole_group_member][i]
+                        residue_modified = residues_modified[idx_pole_group_member][i]
+                        if np.imag(residue) == 0.0:
+                            C[i, idx_col_C] = np.real(residue)
+                            C_modified[i, idx_col_C] = np.real(residue_modified)
+                            idx_col_C += 1
+                        else:
+                            C[i, idx_col_C] = np.real(residue)
+                            C[i, idx_col_C + 1] = np.imag(residue)
+                            C_modified[i, idx_col_C] = np.real(residue_modified)
+                            C_modified[i, idx_col_C + 1] = np.imag(residue_modified)
+                            idx_col_C += 2
+
+                    if create_views:
+                        # Create view on C
+                        C_view[i][j] = C[i, offset_col_C:idx_col_C]
+
+                        # Create view on C_modified
+                        C_modified_view[i][j] = C[i, offset_col_C:idx_col_C]
+
+                        # Create view on F
+                        F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
+
+                    # Create D and E
+                    D[i, j] = constant[idx_pole_group_member]
+                    D_modified[i, j] = constant_modified[idx_pole_group_member]
+                    E[i, j] = proportional[idx_pole_group_member]
+
+                # Increment offset for next pole group
+                offset_col_C = idx_col_C
+
+        if create_views and create_modified:
+            return F, A, B, C, C_modified, D, D_modified, E, F_view, A_view, B_view, C_view, C_modified_view
+
+        elif create_views and not create_modified:
+            return F, A, B, C, D, E, F_view, A_view, B_view, C_view
+
+        elif not create_views and create_modified:
+            return F, A, B, C, C_modified, D, D_modified, E
+
+        else:
+            return F, A, B, C, D, E
 
     def _get_state_space_CDE(self, idx_pole_group, idx_response = None,
                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -3480,7 +3655,7 @@ class VectorFitting:
         """
 
 
-        self._passivity_enforce(
+        self._passivity_enforce_new(
             n_samples, maximum_frequency_of_interest, parameter_type, max_iterations, verbose, perturb_constant)
 
         # Print model summary
@@ -3718,6 +3893,335 @@ class VectorFitting:
                     idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
                     idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
                     self.constant[idx_pole_group][idx_pole_group_member] = D[i, j]
+
+    def _passivity_enforce_new(self,
+        n_samples,
+        maximum_frequency_of_interest,
+        parameter_type,
+        max_iterations,
+        verbose,
+        perturb_constant,
+        ) -> None:
+        # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
+
+        if parameter_type.lower() != 's':
+            raise NotImplementedError('Passivity testing is currently only supported for scattering (S) parameters.')
+
+        if parameter_type.lower() == 's' and len(np.flatnonzero(self.proportional)) > 0:
+            raise ValueError('Passivity testing of scattering parameters with nonzero proportional coefficients does '
+                             'not make any sense; you need to run vector_fit() with option `fit_proportional=False` '
+                             'first.')
+
+        # Run passivity test first
+        if self.is_passive(parameter_type):
+            # Model is already passive; do nothing and return
+            logger.info('Passivity enforcement: The model is already passive. Nothing to do.')
+            return
+
+        # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
+        # This highest relevant frequency is the maximum of the highest crossing from a nonpassive to a passive region
+        # on one hand and the maximum frequency of interest on the other hand [1]
+
+        # Get violation bands
+        violation_bands = self.passivity_test(parameter_type)
+
+        # Get highest crossing from a nonpassive to a passive region
+        omega_highest_crossing = violation_bands[-1, 1]
+
+        # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
+        if np.isinf(omega_highest_crossing):
+            # The paper doesn't specify what to do in this case. It i set to 1.5 omega_start for now
+            # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
+            # to a passive region as specified in the paper.
+            omega_highest_crossing = 1.5 * violation_bands[-1, 0]
+            warnings.warn(
+                'Passivity enforcement: The passivity violations of this model are unbounded. '
+                'Passivity enforcement might still work, but consider re-fitting with a lower number of poles '
+                'and/or without the constants (`fit_constant=False`) if the results are not satisfactory.',
+                UserWarning, stacklevel=2)
+
+        # Check if maximum_frequency_of_interest is specified
+        if maximum_frequency_of_interest is None:
+            # Check if we have a netwoork
+            if self.network is None:
+                raise RuntimeError('Both `self.network` and parameter `maximum_frequency_of_interest` are None. One of them is required to '
+                                   'specify the frequency band of interest for the passivity enforcement.')
+            else:
+                # Set maximum_frequency_of_interest to highest frequency of network
+                maximum_frequency_of_interest = self.network.f[-1]
+
+        # Calculate omega
+        maximum_omega_of_interest = 2 * np.pi * maximum_frequency_of_interest
+
+        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
+        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
+
+        # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
+        # would happen if it's not dense enough.
+        omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
+        s_eval = 1j * omega_eval
+
+        # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
+        # how this parameter influences the algorithm.
+        # This parameter has a really strong influence on the rms error in some tests I ran. Using 1-1e-4 instead
+        # of 1-1e-3 resulted in about 100x less rms error. On the other hand, it does not converge for 1-1e-5.
+        # So this algorithm seems to be extremely sensitive to the value of delta which is contradicting the
+        # paper that's not specific about the value of delta.
+        #delta = 1-1e-3
+
+        # Get state space model
+
+        # Get state space model
+        F, A, B, C, C_modified, D, D_modified, E, F_view, A_view, B_view, C_view, C_modified_view = \
+            self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
+
+        # Asymptotic passivity enforcement
+
+        # Singular value decomposition
+        u, sigma, vh = np.linalg.svd(D, full_matrices=False)
+
+        # Maximum singular value
+        sigma_max = np.max(sigma)
+
+        print(f'initial sigma_max = {sigma_max:.3e}')
+
+        # Debug: Plot the frequency response of each singular value
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots()
+        # ax.grid()
+        # for n in range(np.size(sigma, axis=1)):
+        #     ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ idx_pole_group={idx_pole_group + 1}, index={n + 1}')
+        # ax.set_xlabel('Frequency (rad)')
+        # ax.set_ylabel('Magnitude')
+        # ax.legend(loc='best')
+        # plt.show()
+
+        # Continue if model is non-passive
+        if sigma_max > 1:
+            # Set delta
+            delta = 1
+
+            # Set all sigma that are <= delta to zero
+            sigma[sigma <= delta] = 0
+
+            # Subtract delta from all sigma that are > delta
+            sigma[sigma > delta] -= delta
+
+            # Calculate S_viol
+            S_viol = (u * sigma[:, None, :]) @ vh
+
+            # Original response
+            S_original = C @ F + D
+
+            # Weighting factors
+            alpha = 1.0  # Weight for equation fidelity
+            beta = 0.1   # Weight for preserving original model
+            gamma = 0.01 # Regularization weight for smoothness
+
+            # Define cost function
+            def cost_function(C_flat):
+                # Reshape the flat C vector into matrix form
+                C = C_flat.reshape(S_viol.shape)
+
+                # Compute the reconstructed S_viol from C and B
+                S_viol_reconstructed = C @ B
+
+                # Fidelity to the equation S_viol = C * B
+                fidelity_term = alpha * np.linalg.norm(S_viol - S_viol_reconstructed, ord='fro')**2
+
+                # Deviation from the original S matrix (all frequencies)
+                S_modified = C @ F + D  # Assuming passivity adjustments
+                deviation_term = beta * np.linalg.norm(S_original - S_modified, ord='fro')**2
+
+                # Regularization for smoothness
+                regularization_term = gamma * np.linalg.norm(C, ord='fro')**2
+
+                return fidelity_term + deviation_term + regularization_term
+
+            # Define passivity constraints
+            # def passivity_constraint(C_flat):
+            #     # Reshape the flat C vector into matrix form
+            #     C = C_flat.reshape(S_viol.shape)
+
+            #     # Reconstructed S matrix
+            #     S_reconstructed = C @ B
+
+            #     # Hermitian part must be positive semidefinite: S + S^H >= 0
+            #     S_hermitian = S_reconstructed + S_reconstructed.conj().T
+            #     eigenvalues = np.linalg.eigvalsh(S_hermitian)  # Compute eigenvalues
+
+            #     # Ensure all eigenvalues are >= 0
+            #     return np.min(eigenvalues)
+
+            # Flatten the initial guess for C
+            C_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
+            C_initial_flat = C_initial.flatten()
+
+            # Constraints
+            # constraints = {
+            #     'type': 'ineq',  # Inequality constraint: g(C) >= 0
+            #     'fun': passivity_constraint
+            # }
+
+            # Optimization
+            result = minimize(
+                fun=cost_function,
+                x0=C_initial_flat,
+                #constraints=constraints,
+                method='SLSQP',  # Sequential Least Squares Programming
+                options={'disp': True}
+            )
+
+            # Extract optimized C_viol
+            C_viol_optimized = result.x.reshape(S_viol.shape)
+
+            # Output Results
+            print("Optimized C_viol:")
+            print(C_viol_optimized)
+
+            # Calculate S_viol
+            S_viol_optimized = C_viol_optimized @ B
+
+            # Singular value decomposition
+            u, sigma, vh = np.linalg.svd(S_viol_optimized, full_matrices=False)
+
+            # Maximum singular value
+            sigma_max = np.max(sigma)
+
+            print(f'result sigma_max = {sigma_max:.3e}')
+
+            # Calculate C_asymp and subtract from C_modified
+            # TODO: Fix views and flattening while optimizing.
+            C_modified -= C_viol_optimized
+
+        # TODO: Return if passive
+
+        # Initialize delta
+        delta = 1 - 1e-3
+
+        # Get the number of ports
+        n_ports = self._get_n_ports()
+
+        # Initialize A_ls as a two dimensional list with None for the least squares
+        A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
+
+        # Build F0_transpose
+        for i in range(n_ports):
+            for j in range(n_ports):
+                # Get F0
+                F0 = F_view[i][j]
+
+                # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
+                F0_transpose = np.squeeze(F0)
+
+                # Build A_ls for the least squares problem A x = b
+                A_ls[i][j] = np.vstack((np.real(F0_transpose), np.imag(F0_transpose)))
+
+        # Iterative compensation of passivity violations
+        iteration = 0
+        while iteration < max_iterations:
+            logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
+
+            # Get S
+            S = C_modified @ F + D_modified
+
+            # Singular value decomposition
+            u, sigma, vh = np.linalg.svd(S, full_matrices=False)
+
+            # Debug: Plot the frequency response of each singular value
+            # import matplotlib.pyplot as plt
+            # fig, ax = plt.subplots()
+            # ax.grid()
+            # for n in range(np.size(sigma, axis=1)):
+            #     ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ idx_pole_group={idx_pole_group + 1}, index={n + 1}')
+            # ax.set_xlabel('Frequency (rad)')
+            # ax.set_ylabel('Magnitude')
+            # ax.legend(loc='best')
+            # plt.show()
+
+            # Maximum singular value
+            sigma_max = np.max(sigma)
+
+            # Stop iterations if model is passive
+            if sigma_max <= 1.0:
+                break
+
+            # Set all sigma that are <= delta to zero
+            sigma[sigma <= delta] = 0
+
+            # Subtract delta from all sigma that are > delta
+            sigma[sigma > delta] -= delta
+
+            # Calculate S_viol
+            S_viol = (u * sigma[:, None, :]) @ vh
+
+            # Solve C_viol for every response
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    # Solve overdetermined least squares problem for Cviol
+
+                    # Solve S_viol = C_viol F for C_viol. This is a system of the form x A = b but
+                    # because (AB)^T = B^T A^T, we can convert it into a system of form A x = b by transposing:
+                    #
+                    # Solve F^T C_viol^T = S_viol^T for C_viol^T
+                    # C_viol is of shape 1 x n_poles and
+                    # F is of shape n_poles x n_poles and
+                    # S_viol is of shape 1 x 1, so S_viol^T == S_viol
+                    # (of course in addition to that we have the outermost dimension for the frequency for all of them)
+
+                    # Build b_ls for the least squares problem A x = b
+                    b_ls = np.hstack((np.real(S_viol[:, i, j]), np.imag(S_viol[:, i, j])))
+
+                    # Solve least squares
+                    x, residuals, rank, singular_values = np.linalg.lstsq(A_ls[i][j], b_ls, rcond=None)
+
+                    # Perturb C
+                    C_modified_view[i][j][:] -= x
+
+            # Increment iteration counter
+            iteration += 1
+
+        if verbose:
+            print(f'Passivity enforcement converged in {iteration} iterations')
+
+        # Warn if maximum number of iterations has been exceeded
+        if iteration == max_iterations:
+            warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
+                          'exceeded.', RuntimeWarning, stacklevel=2)
+
+        # Update residues, residues_modified and constant
+        for i in range(n_ports):
+            for j in range(n_ports):
+                idx_response = i * n_ports + j
+                idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
+                idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
+                residues = self.residues[idx_pole_group][idx_pole_group_member]
+                residues_modified = self.residues_modified[idx_pole_group][idx_pole_group_member]
+                poles = self.poles[idx_pole_group]
+                # Initialize constant to constant_modified (dc value only)
+                constant = \
+                    self.constant_modified[idx_pole_group][idx_pole_group_member]
+                idx_column_Ct = 0
+                C_modified_response = C_modified_view[i][j]
+                # Update residues and residues_modified
+                for idx_residue, residue in enumerate(residues):
+                    if np.imag(residue) == 0.0:
+                        # Real residue
+                        residues[idx_residue] = C_modified_response[idx_column_Ct] * poles[idx_residue]
+                        residues_modified[idx_residue] = C_modified_response[idx_column_Ct]
+                        constant += np.real(C_modified_response[idx_column_Ct])
+                        idx_column_Ct += 1
+                    else:
+                        # Complex-conjugate residue
+                        residues[idx_residue] = \
+                            (C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]) * \
+                                poles[idx_response]
+                        residues_modified[idx_residue] = \
+                            C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]
+                        constant += 2 * np.real(C_modified_response[idx_column_Ct])
+                        idx_column_Ct += 2
+                # Update constant
+                self.constant[idx_pole_group][idx_pole_group_member] = constant
 
     def write_npz(self, path: str) -> None:
         """
