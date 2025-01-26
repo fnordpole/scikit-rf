@@ -4114,17 +4114,17 @@ class VectorFitting:
         # Initialize A_ls as a two dimensional list with None for the least squares
         A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
 
-        # Build F0_transpose
+        # Build F0_modified_transpose
         for i in range(n_ports):
             for j in range(n_ports):
                 # Get F0
-                F0 = F_modified_view[i][j]
+                F0_modified = F_modified_view[i][j]
 
                 # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
-                F0_transpose = np.squeeze(F0)
+                F0_modified_transpose = np.squeeze(F0_modified)
 
                 # Build A_ls for the least squares problem A x = b
-                A_ls[i][j] = np.vstack((np.real(F0_transpose), np.imag(F0_transpose)))
+                A_ls[i][j] = np.vstack((np.real(F0_modified_transpose), np.imag(F0_modified_transpose)))
 
         # Iterative compensation of passivity violations
         iteration = 0
