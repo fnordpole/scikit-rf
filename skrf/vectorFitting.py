@@ -2714,8 +2714,7 @@ class VectorFitting:
         else:
             return F, C, D, E
 
-    def _get_state_space_FABCDE(self, s, create_views = False, create_modified = False,
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _get_state_space_FABCDE(self, s, create_views = False, create_modified = False):
         # Creates the state space matrix F=(sI-A)^-1 B and C, D, E
 
         # Input argument s is an array of complex frequencies s = 1j * omega for which F is built.
@@ -2735,6 +2734,7 @@ class VectorFitting:
 
         # These views enable easy accesss to the submatrices
         F_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        F_modified_view = [x[:] for x in [[None] * n_ports] * n_ports]
         A_view = [x[:] for x in [[None] * n_ports] * n_ports]
         B_view = [x[:] for x in [[None] * n_ports] * n_ports]
         C_view = [x[:] for x in [[None] * n_ports] * n_ports]
@@ -2761,6 +2761,7 @@ class VectorFitting:
         # Create empty output matrices
         n_A = int(np.sum(n_subcolumns_in_columns_of_C))
         F = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
+        F_modified = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
         A = np.zeros(shape=(n_A, n_A))
         B = np.zeros(shape=(n_A, n_ports))
         C = np.zeros(shape=(n_ports, n_A))
@@ -2803,6 +2804,7 @@ class VectorFitting:
                     if np.imag(pole) == 0.0:
                         # Real pole
                         F[:, idx_diag_A, j] = 1 / (s - np.real(pole))
+                        F_modified[:, idx_diag_A, j] = s / (s - np.real(pole))
                         A[idx_diag_A, idx_diag_A] = np.real(pole)
                         B[idx_diag_A, j] = 1
                         idx_diag_A += 1
@@ -2811,6 +2813,8 @@ class VectorFitting:
                         denom = (s - np.real(pole))**2 + np.imag(pole)**2
                         F[:, idx_diag_A, j] = 2 * (s - np.real(pole)) / denom
                         F[:, idx_diag_A + 1, j] = -2 * np.imag(pole) / denom
+                        F_modified[:, idx_diag_A, j] = s * 2 * (s - np.real(pole)) / denom
+                        F_modified[:, idx_diag_A + 1, j] = s * -2 * np.imag(pole) / denom
                         A[idx_diag_A, idx_diag_A] = np.real(pole)
                         A[idx_diag_A, idx_diag_A + 1] = np.imag(pole)
                         A[idx_diag_A + 1, idx_diag_A] = -1 * np.imag(pole)
@@ -2826,9 +2830,9 @@ class VectorFitting:
 
                     # Initialize idx_col_C to offset_col_C
                     idx_col_C = offset_col_C
-                    for i in range(len(residues[idx_pole_group_member])):
-                        residue = residues[idx_pole_group_member][i]
-                        residue_modified = residues_modified[idx_pole_group_member][i]
+                    for idx_residue in range(len(residues[idx_pole_group_member])):
+                        residue = residues[idx_pole_group_member][idx_residue]
+                        residue_modified = residues_modified[idx_pole_group_member][idx_residue]
                         if np.imag(residue) == 0.0:
                             C[i, idx_col_C] = np.real(residue)
                             C_modified[i, idx_col_C] = np.real(residue_modified)
@@ -2845,10 +2849,13 @@ class VectorFitting:
                         C_view[i][j] = C[i, offset_col_C:idx_col_C]
 
                         # Create view on C_modified
-                        C_modified_view[i][j] = C[i, offset_col_C:idx_col_C]
+                        C_modified_view[i][j] = C_modified[i, offset_col_C:idx_col_C]
 
                         # Create view on F
                         F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
+
+                        # Create view on F_modified
+                        F_modified_view[i][j] = F_modified[:, offset_col_C:idx_col_C, j]
 
                     # Create D and E
                     D[i, j] = constant[idx_pole_group_member]
@@ -2859,13 +2866,13 @@ class VectorFitting:
                 offset_col_C = idx_col_C
 
         if create_views and create_modified:
-            return F, A, B, C, C_modified, D, D_modified, E, F_view, A_view, B_view, C_view, C_modified_view
+            return F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view
 
         elif create_views and not create_modified:
             return F, A, B, C, D, E, F_view, A_view, B_view, C_view
 
         elif not create_views and create_modified:
-            return F, A, B, C, C_modified, D, D_modified, E
+            return F, F_modified, A, B, C, C_modified, D, D_modified, E
 
         else:
             return F, A, B, C, D, E
@@ -3972,7 +3979,8 @@ class VectorFitting:
         # Get state space model
 
         # Get state space model
-        F, A, B, C, C_modified, D, D_modified, E, F_view, A_view, B_view, C_view, C_modified_view = \
+        #F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view
+        F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view = \
             self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
 
         # Asymptotic passivity enforcement
@@ -4109,7 +4117,7 @@ class VectorFitting:
         for i in range(n_ports):
             for j in range(n_ports):
                 # Get F0
-                F0 = F_view[i][j]
+                F0 = F_modified_view[i][j]
 
                 # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
                 F0_transpose = np.squeeze(F0)
@@ -4123,7 +4131,7 @@ class VectorFitting:
             logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
 
             # Get S
-            S = C_modified @ F + D_modified
+            S = C_modified @ F_modified + D_modified
 
             # Singular value decomposition
             u, sigma, vh = np.linalg.svd(S, full_matrices=False)
@@ -4199,8 +4207,7 @@ class VectorFitting:
                 residues_modified = self.residues_modified[idx_pole_group][idx_pole_group_member]
                 poles = self.poles[idx_pole_group]
                 # Initialize constant to constant_modified (dc value only)
-                constant = \
-                    self.constant_modified[idx_pole_group][idx_pole_group_member]
+                constant = self.constant_modified[idx_pole_group][idx_pole_group_member]
                 idx_column_Ct = 0
                 C_modified_response = C_modified_view[i][j]
                 # Update residues and residues_modified
@@ -4215,7 +4222,7 @@ class VectorFitting:
                         # Complex-conjugate residue
                         residues[idx_residue] = \
                             (C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]) * \
-                                poles[idx_response]
+                                poles[idx_residue]
                         residues_modified[idx_residue] = \
                             C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]
                         constant += 2 * np.real(C_modified_response[idx_column_Ct])
