@@ -3991,7 +3991,7 @@ class VectorFitting:
         # Maximum singular value
         sigma_max = np.max(sigma)
 
-        print(f'initial sigma_max = {sigma_max:.3e}')
+        print(f'Initial sigma_max = {sigma_max:.3e}')
 
         # Debug: Plot the frequency response of each singular value
         # import matplotlib.pyplot as plt
@@ -4016,7 +4016,7 @@ class VectorFitting:
             sigma[sigma > delta] -= delta
 
             # Calculate S_viol
-            S_viol = (u * sigma[:, None, :]) @ vh
+            S_viol = (u * sigma) @ vh
 
             # Original response
             S_original = C @ F + D
@@ -4097,7 +4097,7 @@ class VectorFitting:
             # Maximum singular value
             sigma_max = np.max(sigma)
 
-            print(f'result sigma_max = {sigma_max:.3e}')
+            print(f'Result sigma_max = {sigma_max:.3e}')
 
             # Calculate C_asymp and subtract from C_modified
             # TODO: Fix views and flattening while optimizing.
@@ -4126,11 +4126,14 @@ class VectorFitting:
                 # Build A_ls for the least squares problem A x = b
                 A_ls[i][j] = np.vstack((np.real(F0_modified_transpose), np.imag(F0_modified_transpose)))
 
+        # Save C_modified to compare after perturbation
+        C_modified_save = np.copy(C_modified)
+
         # Iterative compensation of passivity violations
         iteration = 0
         while iteration < max_iterations:
-            logger.info(f'Passivity enforcement: Iteration {iteration + 1}')
 
+            logger.info(f'C_modified_in = {C_modified}')
             # Get S
             S = C_modified @ F_modified + D_modified
 
@@ -4150,6 +4153,7 @@ class VectorFitting:
 
             # Maximum singular value
             sigma_max = np.max(sigma)
+            logger.info(f'Passivity enforcement: Iteration {iteration + 1} SigmaMax = {sigma_max}')
 
             # Stop iterations if model is passive
             if sigma_max <= 1.0:
@@ -4190,13 +4194,19 @@ class VectorFitting:
             # Increment iteration counter
             iteration += 1
 
-        if verbose:
-            print(f'Passivity enforcement converged in {iteration} iterations')
+        # Calculate dC/C
+        C_modified_delta = C_modified - C_modified_save
+        C_modified_delta_norm_rel = \
+            np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
 
         # Warn if maximum number of iterations has been exceeded
         if iteration == max_iterations:
             warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
                           'exceeded.', RuntimeWarning, stacklevel=2)
+        else:
+            print(f'Passivity enforcement converged in {iteration} iterations')
+
+        print(f'Passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
 
         # Update residues, residues_modified and constant
         for i in range(n_ports):
