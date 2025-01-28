@@ -2739,6 +2739,11 @@ class VectorFitting:
         B_view = [x[:] for x in [[None] * n_ports] * n_ports]
         C_view = [x[:] for x in [[None] * n_ports] * n_ports]
         C_modified_view = [x[:] for x in [[None] * n_ports] * n_ports]
+        C_col_idx_begin = [x[:] for x in [[None] * n_ports] * n_ports]
+        C_col_idx_end = [x[:] for x in [[None] * n_ports] * n_ports]
+
+        # Number of elements in each C_view[i, j]
+        nC = np.zeros(shape=(n_ports, n_ports))
 
         # Get model orders for every pole group
         model_orders=np.array([self.get_model_order(x) for x in range(len(self.poles))])
@@ -2851,6 +2856,13 @@ class VectorFitting:
                         # Create view on C_modified
                         C_modified_view[i][j] = C_modified[i, offset_col_C:idx_col_C]
 
+                        # Create nC
+                        nC[i, j] = idx_col_C - offset_col_C
+
+                        # Create view on C
+                        C_col_idx_begin[i][j] = offset_col_C
+                        C_col_idx_end[i][j] = idx_col_C
+
                         # Create view on F
                         F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
 
@@ -2866,10 +2878,12 @@ class VectorFitting:
                 offset_col_C = idx_col_C
 
         if create_views and create_modified:
-            return F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view
+            return F, F_modified, A, B, C, C_modified, D, D_modified, E, \
+                F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+                nC, C_col_idx_begin, C_col_idx_end
 
         elif create_views and not create_modified:
-            return F, A, B, C, D, E, F_view, A_view, B_view, C_view
+            return F, A, B, C, D, E, F_view, A_view, B_view, C_view, nC, C_col_idx_begin, C_col_idx_end
 
         elif not create_views and create_modified:
             return F, F_modified, A, B, C, C_modified, D, D_modified, E
@@ -3980,7 +3994,9 @@ class VectorFitting:
 
         # Get state space model
         #F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view
-        F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view = \
+        F, F_modified, A, B, C, C_modified, D, D_modified, E, \
+            F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+            nC, C_col_idx_begin, C_col_idx_end = \
             self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
 
         # Asymptotic passivity enforcement
@@ -4026,11 +4042,24 @@ class VectorFitting:
             beta = 0.1   # Weight for preserving original model
             gamma = 0.01 # Regularization weight for smoothness
 
+            # Copy
+            _C_modified = np.copy(C_modified)
+
+            def flat_C_to_matrix_C(C_flat, C_matrix):
+                # Reshape the flat C vector into matrix form
+                offs = 0
+                for i in range(n_ports):
+                    for j in range(n_ports):
+                        j_beg = C_col_idx_begin[i][j]
+                        j_end = C_col_idx_end[i][j]
+                        n = j_end - j_beg
+                        C_matrix[i, j_beg:j_end] =  C_flat[offs:offs + n]
+                        offs += n
+
             # Define cost function
             def cost_function(C_modified_flat):
                 # Reshape the flat C vector into matrix form
-                # TODO: Account for views!!
-                _C_modified = C_modified_flat.reshape(S_viol.shape)
+                flat_C_to_matrix_C(C_modified_flat, _C_modified)
 
                 # Compute the reconstructed S_viol from C and B
                 S_viol_reconstructed = _C_modified @ B
@@ -4063,7 +4092,8 @@ class VectorFitting:
             #     return np.min(eigenvalues)
 
             # Flatten the initial guess for C
-            C_modified_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
+            #C_modified_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
+            C_modified_initial = np.copy(C_modified)
             C_modified_initial_flat = C_modified_initial.flatten()
 
             # Constraints
@@ -4082,14 +4112,10 @@ class VectorFitting:
             )
 
             # Extract optimized C_viol
-            C_modified_viol_optimized = result.x.reshape(S_viol.shape)
-
-            # Output Results
-            print("Optimized C_viol:")
-            print(C_modified_viol_optimized)
+            flat_C_to_matrix_C(result.x, _C_modified)
 
             # Calculate S_viol
-            S_viol_optimized = C_modified_viol_optimized @ B
+            S_viol_optimized = _C_modified @ B
 
             # Singular value decomposition
             u, sigma, vh = np.linalg.svd(S_viol_optimized, full_matrices=False)
@@ -4100,10 +4126,15 @@ class VectorFitting:
             print(f'Result sigma_max = {sigma_max:.3e}')
 
             # Calculate C_asymp and subtract from C_modified
-            # TODO: Fix views and flattening while optimizing.
-            C_modified -= C_modified_viol_optimized
+            C_modified -= _C_modified
 
-        # TODO: Return if passive
+        # Return if passive
+        if self.is_passive(parameter_type):
+            # Model is passive
+            logger.info('Passivity enforcement: Model is passive after asymptotic passivity enforcement.')
+            return
+        else:
+            logger.info('Passivity enforcement: Model is not passive after asymptotic passivity enforcement.')
 
         # Initialize delta
         delta = 1 - 1e-3
