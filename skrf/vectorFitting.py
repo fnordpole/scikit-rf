@@ -219,6 +219,71 @@ class VectorFitting:
 
         return model_order
 
+    def _check_and_enforce_data_passivity_at_dc(self, responses, enforce_data_passivity_at_dc = True):
+        # Enforces the dc point in the data to be passive
+        n_ports = int(np.sqrt(np.size(responses, axis = 0)))
+
+        # Get S_DC and take the real part of it. The DC point cannot have imaginary parts. Maybe we can
+        # add a warning if there are substantial imaginary parts in the DC but for now I leave it like this.
+        S_DC = np.real(self.network.s[0])
+
+        # Update DC point to real-only in responses
+        for i in range(n_ports):
+            for j in range(n_ports):
+                idx_response = i * n_ports + j
+                responses[idx_response, 0] = S_DC[i, j]
+
+        # Check if passive
+        singular_values = np.linalg.svd(S_DC, compute_uv=False)
+        max_singular_value = np.max(singular_values)
+        is_passive = max_singular_value <= 1
+
+        # Return if passive
+        if is_passive:
+            logger.info('Warning: DC is passive at DC')
+            return
+
+        warnings.warn('Warning: Data is not passive at DC', UserWarning, stacklevel=2)
+
+        # Check whether data passivity at dc is enabled
+        if not enforce_data_passivity_at_dc:
+            warnings.warn('Warning: Data passivity enforcement at DC is disabled!', UserWarning, stacklevel=2)
+            return
+
+        logger.info('Starting data passivity enforcement at DC')
+
+        # Define cost function for optimizer
+        N = S_DC.shape[0]
+        def cost_function(S_flat):
+            # TODO: This cost function needs to be improved: Minimize only until
+            # all SV are <= 1 and not more than that. Also add a cost term
+            # on the deviation of Sij to the original Sij. This vanilla version
+            # is probably bad and will change the DC point more than necessary.
+            S = S_flat.reshape(N, N)
+            singular_values = np.linalg.svd(S, compute_uv=False)
+            return np.max(singular_values)  # Minimize the largest singular value
+
+        S_initial = S_DC.flatten()
+        result = minimize(cost_function, S_initial, method='L-BFGS-B')
+        S_DC = result.x.reshape(N, N)
+
+        # Post-passsivity enforcement passivity check
+        singular_values = np.linalg.svd(S_DC, compute_uv=False)
+        max_singular_value = np.max(singular_values)
+        is_passive = max_singular_value <= 1
+
+        if not is_passive:
+            warnings.warn('Warning: Data passivity enforcement at DC failed', UserWarning, stacklevel=2)
+            return
+
+        logger.info('Data passivity enforcement at DC succeeded')
+
+        # Update DC point in responses
+        for i in range(n_ports):
+            for j in range(n_ports):
+                idx_response = i * n_ports + j
+                responses[idx_response, 0] = S_DC[i, j]
+
     def vector_fit(self,
                  # Initial poles
                  poles_init = None,
@@ -250,6 +315,9 @@ class VectorFitting:
 
                  # Verbose
                  verbose = False,
+
+                 # Enforce dc data passivity
+                 enforce_data_passivity_at_dc = True,
                  ) -> None:
         """
         Main work routine performing the vector fit. The results will be stored in the class variables
@@ -355,6 +423,18 @@ class VectorFitting:
             Enables the memory saver. If enabled, the runtime might be longer but the memory usage is reduced.
             Use it for very large data sets if memory is the limiting factor.
 
+        enforce_data_passivity_at_dc: bool, optional
+            Enables the enforcement of the passivity of the DC point before fitting. The DC point cannot be modified
+            by post-fit passivity enforcement because it needs to be exact. So the DC point of the fit will be just
+            set to the DC point of the data. The model thus can only be passive if the DC point is passive as well.
+
+            Circuit simulators numeric errors or measurments can lead to an (even sligthly) non-passive DC point.
+            If you enable this setting, the DC point will be perturbed as slightly as possible (optimizer) until
+            it is passive. This will lead to an error at DC but it is unavoidable to make the model passive at DC.
+
+            A warning will be printed if the DC point is non-passive in any case, so you have the chance to provide
+            better data at DC that is passive, avoiding subsequent errors due to the passivity enforcement.
+
         Returns
         -------
         None
@@ -383,6 +463,9 @@ class VectorFitting:
         # Get responses
         responses = self._get_responses(parameter_type)
         n_responses = np.size(responses, axis=0)
+
+        # Check and enforce passivity at DC
+        self._check_and_enforce_data_passivity_at_dc(responses, enforce_data_passivity_at_dc)
 
         # Get weights
         if weights is None:
@@ -491,13 +574,13 @@ class VectorFitting:
                 # Print convergence hint for cond(A_dense)
                 max_cond = np.amax(self.history_cond_A_dense)
                 if max_cond > 1e10:
-                    warnings.warn = ('Hint: the linear system was ill-conditioned (max. condition number was '
+                    warnings.warn('Hint: the linear system was ill-conditioned (max. condition number was '
                                     f'{max_cond:.4e}).')
 
                 # Print convergence hint for rank(A_dense)
                 max_deficiency = np.amax(self.history_rank_deficiency_A_dense)
                 if max_deficiency < 0:
-                   warnings.warn  = ('Hint: the coefficient matrix was rank-deficient (max. rank deficiency was '
+                   warnings.warn('Hint: the coefficient matrix was rank-deficient (max. rank deficiency was '
                                  f'{max_deficiency}).')
 
                 break
@@ -543,6 +626,9 @@ class VectorFitting:
 
                  # Verbose
                  verbose = False,
+
+                 # Enforce dc data passivity
+                 enforce_data_passivity_at_dc = True,
                  ) -> (np.ndarray, np.ndarray):
         """
         Automatic fitting routine implementing the "vector fitting with adding and skimming" algorithm as proposed in
@@ -707,6 +793,18 @@ class VectorFitting:
             original S parameters. Otherwise, scikit-rf will convert the responses from S to Z or Y, which might work
             for the fit but can cause other issues.
 
+        enforce_data_passivity_at_dc: bool, optional
+            Enables the enforcement of the passivity of the DC point before fitting. The DC point cannot be modified
+            by post-fit passivity enforcement because it needs to be exact. So the DC point of the fit will be just
+            set to the DC point of the data. The model thus can only be passive if the DC point is passive as well.
+
+            Circuit simulators numeric errors or measurments can lead to an (even sligthly) non-passive DC point.
+            If you enable this setting, the DC point will be perturbed as slightly as possible (optimizer) until
+            it is passive. This will lead to an error at DC but it is unavoidable to make the model passive at DC.
+
+            A warning will be printed if the DC point is non-passive in any case, so you have the chance to provide
+            better data at DC that is passive, avoiding subsequent errors due to the passivity enforcement.
+
         Returns
         -------
         None
@@ -732,6 +830,9 @@ class VectorFitting:
         # Get responses
         responses = self._get_responses(parameter_type)
         n_responses = np.size(responses, axis=0)
+
+        # Check and enforce passivity at DC
+        self._check_and_enforce_data_passivity_at_dc(responses, enforce_data_passivity_at_dc)
 
         # Get weights
         if weights is None:
@@ -3982,24 +4083,27 @@ class VectorFitting:
         omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
         s_eval = 1j * omega_eval
 
-        # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
+        # Get n_ports
+        n_ports = self._get_n_ports()
+
+        # Notes on parameter delta:
+        #
+        # Tolerance parameter according to paper. Unfortunately it does not provide any information on
         # how this parameter influences the algorithm.
+        #
         # This parameter has a really strong influence on the rms error in some tests I ran. Using 1-1e-4 instead
         # of 1-1e-3 resulted in about 100x less rms error. On the other hand, it does not converge for 1-1e-5.
         # So this algorithm seems to be extremely sensitive to the value of delta which is contradicting the
         # paper that's not specific about the value of delta.
-        #delta = 1-1e-3
 
-        # Get state space model
-
-        # Get state space model
-        #F, F_modified, A, B, C, C_modified, D, D_modified, E, F_view, F_modified_view, A_view, B_view, C_view, C_modified_view
+        # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
         F, F_modified, A, B, C, C_modified, D, D_modified, E, \
             F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
             nC, C_col_idx_begin, C_col_idx_end = \
             self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
 
-        # Asymptotic passivity enforcement
+        # Asymptotic passivity enforcement.
+        # TODO: The optimizer code etc is completely untested! I guess it does not work yet.
 
         # Singular value decomposition
         u, sigma, vh = np.linalg.svd(D, full_matrices=False)
@@ -4136,6 +4240,8 @@ class VectorFitting:
         else:
             logger.info('Passivity enforcement: Model is not passive after asymptotic passivity enforcement.')
 
+        # Uniform passivity enforcement
+
         # Initialize delta
         delta = 1 - 1e-3
 
@@ -4144,6 +4250,7 @@ class VectorFitting:
 
         # Initialize A_ls as a two dimensional list with None for the least squares
         A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
+        weights_ls = [x[:] for x in [[None] * n_ports] * n_ports]
 
         # Build F0_modified_transpose
         for i in range(n_ports):
@@ -4152,10 +4259,16 @@ class VectorFitting:
                 F0_modified = F_modified_view[i][j]
 
                 # Transpose F. We can transpose and squeeze the size 1 dimension in 1 go:
-                F0_modified_transpose = np.squeeze(F0_modified)
+                #F0_modified_transpose = np.squeeze(F0_modified)[1:] # TODO: Unclear: LS without DC point?
+                F0_modified_transpose = np.squeeze(F0_modified)[0:] # or with DC point?
 
                 # Build A_ls for the least squares problem A x = b
                 A_ls[i][j] = np.vstack((np.real(F0_modified_transpose), np.imag(F0_modified_transpose)))
+
+                # TODO: LS with weighted equation rows or not?
+                # If enabled, enable b weighting in the LS loop below using the same weights!
+                #weights_ls[i][j] = np.linalg.norm(A_ls[i][j], axis = 1)
+                #A_ls[i][j][:, :] = A_ls[i][j][:, :] / weights_ls[i][j][:, None]
 
         # Save C_modified to compare after perturbation
         C_modified_save = np.copy(C_modified)
@@ -4176,7 +4289,7 @@ class VectorFitting:
             # fig, ax = plt.subplots()
             # ax.grid()
             # for n in range(np.size(sigma, axis=1)):
-            #     ax.plot(omega_eval, sigma[:, n], label=fr'$\sigma$ idx_pole_group={idx_pole_group + 1}, index={n + 1}')
+            #     ax.plot(omega_eval[:10], sigma[:10, 1], label=fr'$\sigma$ idx={n + 1}', marker='x')
             # ax.set_xlabel('Frequency (rad)')
             # ax.set_ylabel('Magnitude')
             # ax.legend(loc='best')
@@ -4197,7 +4310,15 @@ class VectorFitting:
             sigma[sigma > delta] -= delta
 
             # Calculate S_viol
-            S_viol = (u * sigma[:, None, :]) @ vh
+            #
+            # TODO: Unclear: Should we subtract D from the S_viol? The least squares will not be able
+            # to perturb D so the equations at DC with all zeros in A_ls will have a nonzero b that's
+            # impossible to fit
+            #S_viol = (((u * sigma[:, None, :]) @ vh) - D_modified)[1:] # Without D and without DC row
+            #S_viol = (((u * sigma[:, None, :]) @ vh) - D_modified)[0:] # Without D and with DC row
+
+            #S_viol = (((u * sigma[:, None, :]) @ vh))[1:] # TODO: Unclear: DC equation in LS system?
+            S_viol = (((u * sigma[:, None, :]) @ vh))[0:] # or no DC equation in LS system? Match with A_ls above!
 
             # Solve C_viol for every response
             for i in range(n_ports):
@@ -4216,11 +4337,20 @@ class VectorFitting:
                     # Build b_ls for the least squares problem A x = b
                     b_ls = np.hstack((np.real(S_viol[:, i, j]), np.imag(S_viol[:, i, j])))
 
+                    # TODO: Weighted LS equatins or not? Comments see above at A_ls!
+                    #b_ls = np.hstack((np.real(S_viol[:, i, j]), np.imag(S_viol[:, i, j]))) / weights_ls[i][j]
+
                     # Solve least squares
                     x, residuals, rank, singular_values = np.linalg.lstsq(A_ls[i][j], b_ls, rcond=None)
 
                     # Perturb C
                     C_modified_view[i][j][:] -= x
+
+            # Calculate dC/C
+            C_modified_delta = C_modified - C_modified_save
+            C_modified_delta_norm_rel = \
+                np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
+            logger.info(f'Passivity enforcement dC/C = {C_modified_delta_norm_rel:.3e}')
 
             # Increment iteration counter
             iteration += 1
@@ -4229,6 +4359,8 @@ class VectorFitting:
         C_modified_delta = C_modified - C_modified_save
         C_modified_delta_norm_rel = \
             np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
+        print(f'Passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
+
 
         # Warn if maximum number of iterations has been exceeded
         if iteration == max_iterations:
@@ -4236,8 +4368,6 @@ class VectorFitting:
                           'exceeded.', RuntimeWarning, stacklevel=2)
         else:
             print(f'Passivity enforcement converged in {iteration} iterations')
-
-        print(f'Passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
 
         # Update residues, residues_modified and constant
         for i in range(n_ports):
