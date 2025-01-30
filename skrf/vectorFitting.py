@@ -4182,14 +4182,14 @@ class VectorFitting:
             S_viol = (u * sigma) @ vh
 
             # Original response
-            S_original = C_modified @ F_modified + D_modified
+            # S_original = C_modified @ F_modified + D_modified # See cost_function
 
             # Weighting factors
             alpha = 1.0  # Weight for equation fidelity
             beta = 1.0   # Weight for preserving original model
-            gamma = 0.01 # Regularization weight for smoothness
+            # gamma = 0.01 # Regularization weight for smoothness. See cost_function
 
-            # Copy
+            # Create working copy of C_modified for optimization
             _C_modified = np.copy(C_modified)
 
             def flat_C_to_matrix_C(C_flat, C_matrix):
@@ -4215,7 +4215,6 @@ class VectorFitting:
                 fidelity_term = alpha * np.linalg.norm(S_viol - S_viol_reconstructed, ord='fro')**2
 
                 # Deviation from the original S matrix (all frequencies)
-                #
                 # Disabled because it is very costly
                 #
                 # S_modified = _C_modified @ F_modified + D_modified  # Assuming passivity adjustments
@@ -4234,7 +4233,6 @@ class VectorFitting:
                 return fidelity_term + deviation_term# + regularization_term
 
             # Flatten the initial guess for C
-            #C_modified_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
             C_modified_initial = np.copy(C_modified)
             C_modified_initial_flat = C_modified_initial.flatten()
 
@@ -4270,10 +4268,10 @@ class VectorFitting:
         # Return if passive
         if self.is_passive(parameter_type):
             # Model is passive
-            logger.info('Passivity enforcement: Model is passive after asymptotic passivity enforcement.')
+            logger.info('Model is passive after asymptotic passivity enforcement.')
             return
         else:
-            logger.info('Passivity enforcement: Model is not passive after asymptotic passivity enforcement.')
+            logger.info('Model is not passive after asymptotic passivity enforcement.')
 
         # Uniform passivity enforcement
         print('Starting uniform passivity enforcement')
@@ -4286,7 +4284,7 @@ class VectorFitting:
 
         # Initialize A_ls as a two dimensional list with None for the least squares
         A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
-        weights_ls = [x[:] for x in [[None] * n_ports] * n_ports]
+        # weights_ls = [x[:] for x in [[None] * n_ports] * n_ports] # TODO: See comments below on weighting
 
         # Build F0_modified_transpose
         for i in range(n_ports):
@@ -4307,13 +4305,13 @@ class VectorFitting:
                 #A_ls[i][j][:, :] = A_ls[i][j][:, :] / weights_ls[i][j][:, None]
 
         # Save C_modified to compare after perturbation
-        C_modified_save = np.copy(C_modified)
+        C_modified_original = np.copy(C_modified)
 
         # Iterative compensation of passivity violations
         iteration = 0
         while iteration < max_iterations:
 
-            logger.info(f'C_modified_in = {C_modified}')
+            #logger.info(f'C_modified_in = {C_modified}')
             # Get S
             S = C_modified @ F_modified + D_modified
 
@@ -4333,7 +4331,7 @@ class VectorFitting:
 
             # Maximum singular value
             sigma_max = np.max(sigma)
-            logger.info(f'Passivity enforcement: Iteration {iteration + 1} SigmaMax = {sigma_max}')
+            logger.info(f'Uniform passivity enforcement: Iteration {iteration + 1} SigmaMax = {sigma_max}')
 
             # Stop iterations if model is passive
             if sigma_max <= 1.0:
@@ -4383,18 +4381,18 @@ class VectorFitting:
                     C_modified_view[i][j][:] -= x
 
             # Calculate dC/C
-            C_modified_delta = C_modified - C_modified_save
+            C_modified_delta = C_modified - C_modified_original
             C_modified_delta_norm_rel = \
-                np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
+                np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_original, ord='fro')
             logger.info(f'Uniform passivity enforcement dC/C = {C_modified_delta_norm_rel:.3e}')
 
             # Increment iteration counter
             iteration += 1
 
         # Calculate dC/C
-        C_modified_delta = C_modified - C_modified_save
+        C_modified_delta = C_modified - C_modified_original
         C_modified_delta_norm_rel = \
-            np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
+            np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_original, ord='fro')
         print(f'Uniform passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
 
         # Warn if maximum number of iterations has been exceeded
