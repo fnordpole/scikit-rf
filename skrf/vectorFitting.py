@@ -252,8 +252,16 @@ class VectorFitting:
 
         logger.info('Starting data passivity enforcement at DC')
 
+        # Save for comparison post optimization
+        S_DC_original = np.copy(S_DC)
+
         # Define cost function for optimizer
         N = S_DC.shape[0]
+
+        # Weights for cost function terms. Need to set a very strong weight on deviation_term
+        # otherwise the S_DC will all end up being zero after optimization
+        alpha = 0.01
+        beta = 1.0
         def cost_function(S_flat):
             # TODO: This cost function needs to be improved: Minimize only until
             # all SV are <= 1 and not more than that. Also add a cost term
@@ -261,7 +269,12 @@ class VectorFitting:
             # is probably bad and will change the DC point more than necessary.
             S = S_flat.reshape(N, N)
             singular_values = np.linalg.svd(S, compute_uv=False)
-            return np.max(singular_values)  # Minimize the largest singular value
+            fidelity_term = alpha * np.max(singular_values)  # Minimize the largest singular value
+
+            # Deviation from the original S matrix
+            deviation_term = beta * np.linalg.norm(S - S_DC_original, ord='fro')**2
+
+            return fidelity_term + deviation_term
 
         S_initial = S_DC.flatten()
         result = minimize(cost_function, S_initial, method='L-BFGS-B')
@@ -271,6 +284,12 @@ class VectorFitting:
         singular_values = np.linalg.svd(S_DC, compute_uv=False)
         max_singular_value = np.max(singular_values)
         is_passive = max_singular_value <= 1
+
+        # Calculate dS/S
+        S_DC_delta = S_DC - S_DC_original
+        S_DC_delta_norm_rel = \
+            np.linalg.norm(S_DC_delta, ord='fro') / np.linalg.norm(S_DC_original, ord='fro')
+        logger.info(f'Data passivity enforcement dS/S = {S_DC_delta_norm_rel:.3e}')
 
         if not is_passive:
             warnings.warn('Warning: Data passivity enforcement at DC failed', UserWarning, stacklevel=2)
