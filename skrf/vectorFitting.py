@@ -4152,7 +4152,7 @@ class VectorFitting:
         # Maximum singular value
         sigma_max = np.max(sigma)
 
-        print(f'Initial sigma_max = {sigma_max:.3e}')
+
 
         # Debug: Plot the frequency response of each singular value
         # import matplotlib.pyplot as plt
@@ -4167,6 +4167,8 @@ class VectorFitting:
 
         # Continue if model is non-passive
         if sigma_max > 1:
+            print(f'Starting asymptotic passivity enforcement. SigmaMax = {sigma_max:.3e}')
+
             # Set delta
             delta = 1
 
@@ -4180,11 +4182,11 @@ class VectorFitting:
             S_viol = (u * sigma) @ vh
 
             # Original response
-            S_original = C @ F + D
+            S_original = C_modified @ F_modified + D_modified
 
             # Weighting factors
             alpha = 1.0  # Weight for equation fidelity
-            beta = 0.1   # Weight for preserving original model
+            beta = 1.0   # Weight for preserving original model
             gamma = 0.01 # Regularization weight for smoothness
 
             # Copy
@@ -4213,48 +4215,31 @@ class VectorFitting:
                 fidelity_term = alpha * np.linalg.norm(S_viol - S_viol_reconstructed, ord='fro')**2
 
                 # Deviation from the original S matrix (all frequencies)
-                S_modified = _C_modified @ F_modified + D_modified  # Assuming passivity adjustments
-                deviation_term = beta * np.linalg.norm(S_original - S_modified, ord='fro')**2
+                #
+                # Disabled because it is very costly
+                #
+                # S_modified = _C_modified @ F_modified + D_modified  # Assuming passivity adjustments
+                # deviation_term = 0
+                # for i in range(np.size(S_original, axis = 0)):
+                #     deviation_term += np.linalg.norm(S_original[i] - S_modified[i], ord='fro')**2
+                # deviation_term = beta * deviation_term / np.size(S_original, axis = 0)
+                #
+                # Minimizing norm of dC instead
+                # Calculate dC
+                deviation_term = beta * np.linalg.norm(_C_modified - C_modified, ord = 'fro')
 
                 # Regularization for smoothness
-                regularization_term = gamma * np.linalg.norm(_C_modified, ord='fro')**2
+                #regularization_term = gamma * np.linalg.norm(_C_modified, ord='fro')**2
 
-                return fidelity_term + deviation_term + regularization_term
-
-            # Define passivity constraints
-            # def passivity_constraint(C_flat):
-            #     # Reshape the flat C vector into matrix form
-            #     C = C_flat.reshape(S_viol.shape)
-
-            #     # Reconstructed S matrix
-            #     S_reconstructed = C @ B
-
-            #     # Hermitian part must be positive semidefinite: S + S^H >= 0
-            #     S_hermitian = S_reconstructed + S_reconstructed.conj().T
-            #     eigenvalues = np.linalg.eigvalsh(S_hermitian)  # Compute eigenvalues
-
-            #     # Ensure all eigenvalues are >= 0
-            #     return np.min(eigenvalues)
+                return fidelity_term + deviation_term# + regularization_term
 
             # Flatten the initial guess for C
             #C_modified_initial = S_viol @ np.linalg.pinv(B)  # Initial guess using pseudoinverse
             C_modified_initial = np.copy(C_modified)
             C_modified_initial_flat = C_modified_initial.flatten()
 
-            # Constraints
-            # constraints = {
-            #     'type': 'ineq',  # Inequality constraint: g(C) >= 0
-            #     'fun': passivity_constraint
-            # }
-
             # Optimization
-            result = minimize(
-                fun=cost_function,
-                x0=C_modified_initial_flat,
-                #constraints=constraints,
-                method='SLSQP',  # Sequential Least Squares Programming
-                options={'disp': True}
-            )
+            result = minimize(cost_function, C_modified_initial_flat, method='L-BFGS-B')
 
             # Extract optimized C_viol
             flat_C_to_matrix_C(result.x, _C_modified)
@@ -4268,10 +4253,19 @@ class VectorFitting:
             # Maximum singular value
             sigma_max = np.max(sigma)
 
-            print(f'Result sigma_max = {sigma_max:.3e}')
+            # Calculate dC/C
+            C_modified_delta = _C_modified - C_modified
+            C_modified_delta_norm_rel = \
+                np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified, ord='fro')
+            print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
 
             # Calculate C_asymp and subtract from C_modified
             C_modified -= _C_modified
+
+            # Update model
+            self._passivity_update_model(C_modified_view)
+
+            print(f'Finished asymptotic passivity enforcement. SigmaMax = {sigma_max:.3e}')
 
         # Return if passive
         if self.is_passive(parameter_type):
@@ -4282,6 +4276,7 @@ class VectorFitting:
             logger.info('Passivity enforcement: Model is not passive after asymptotic passivity enforcement.')
 
         # Uniform passivity enforcement
+        print('Starting uniform passivity enforcement')
 
         # Initialize delta
         delta = 1 - 1e-3
@@ -4391,7 +4386,7 @@ class VectorFitting:
             C_modified_delta = C_modified - C_modified_save
             C_modified_delta_norm_rel = \
                 np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
-            logger.info(f'Passivity enforcement dC/C = {C_modified_delta_norm_rel:.3e}')
+            logger.info(f'Uniform passivity enforcement dC/C = {C_modified_delta_norm_rel:.3e}')
 
             # Increment iteration counter
             iteration += 1
@@ -4400,15 +4395,25 @@ class VectorFitting:
         C_modified_delta = C_modified - C_modified_save
         C_modified_delta_norm_rel = \
             np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_save, ord='fro')
-        print(f'Passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
-
+        print(f'Uniform passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
 
         # Warn if maximum number of iterations has been exceeded
         if iteration == max_iterations:
-            warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
+            warnings.warn('Uniform passivity enforcement: Aborting after the max. number of iterations has been '
                           'exceeded.', RuntimeWarning, stacklevel=2)
-        else:
-            print(f'Passivity enforcement converged in {iteration} iterations')
+            return
+
+        # Update model
+        self._passivity_update_model(C_modified_view)
+
+        print(f'Finished uniform passivity enforcement after {iteration} iterations')
+
+    def _passivity_update_model(self, C_modified_view):
+        # Updates residues, residues_modified and constant of the model
+        # using state space C_modified via a C_modified view
+
+        # Get the number of ports
+        n_ports = self._get_n_ports()
 
         # Update residues, residues_modified and constant
         for i in range(n_ports):
