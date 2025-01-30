@@ -219,8 +219,18 @@ class VectorFitting:
 
         return model_order
 
-    def _check_and_enforce_data_passivity_at_dc(self, responses, enforce_data_passivity_at_dc = True):
-        # Enforces the dc point in the data to be passive
+    def _check_and_enforce_data_passivity_at_dc(self,
+        responses,
+        enforce_data_passivity_at_dc = True,
+        method = 'svd',
+        ):
+        # Enforces the dc point in the data to be passive using one of two methods.
+        #
+        # Method 'optimizer' uses a cost function that is minimized. It minimizes the deviation
+        # in the S_DC and the maximum singular value.
+        #
+        # Method 'svd' (default) uses singular value decomposition based clippig.
+
         n_ports = int(np.sqrt(np.size(responses, axis = 0)))
 
         # Get S_DC and take the real part of it. The DC point cannot have imaginary parts. Maybe we can
@@ -255,30 +265,42 @@ class VectorFitting:
         # Save for comparison post optimization
         S_DC_original = np.copy(S_DC)
 
-        # Define cost function for optimizer
-        N = S_DC.shape[0]
+        if method == 'optimizer':
+            # Define cost function for optimizer
+            N = S_DC.shape[0]
 
-        # Weights for cost function terms. Need to set a very strong weight on deviation_term
-        # otherwise the S_DC will all end up being zero after optimization
-        alpha = 0.01
-        beta = 1.0
-        def cost_function(S_flat):
-            # TODO: This cost function needs to be improved: Minimize only until
-            # all SV are <= 1 and not more than that. Also add a cost term
-            # on the deviation of Sij to the original Sij. This vanilla version
-            # is probably bad and will change the DC point more than necessary.
-            S = S_flat.reshape(N, N)
-            singular_values = np.linalg.svd(S, compute_uv=False)
-            fidelity_term = alpha * np.max(singular_values)  # Minimize the largest singular value
+            # Weights for cost function terms. Need to set a very strong weight on deviation_term
+            # otherwise the S_DC will all end up being zero after optimization
+            alpha = 1.0
+            beta = 1.0
+            def cost_function(S_flat):
+                # Calculate fidelity term based on maximum singular value
+                S = S_flat.reshape(N, N)
+                singular_values = np.linalg.svd(S, compute_uv=False)
+                fidelity_term = alpha * (np.max(singular_values) - 1)
+                if fidelity_term < 0:
+                    fidelity_term = 0
 
-            # Deviation from the original S matrix
-            deviation_term = beta * np.linalg.norm(S - S_DC_original, ord='fro')**2
+                # Deviation from the original S matrix
+                deviation_term = beta * np.linalg.norm(S - S_DC_original, ord='fro')**2
 
-            return fidelity_term + deviation_term
+                return fidelity_term + deviation_term
 
-        S_initial = S_DC.flatten()
-        result = minimize(cost_function, S_initial, method='L-BFGS-B')
-        S_DC = result.x.reshape(N, N)
+            S_initial = S_DC.flatten()
+            result = minimize(cost_function, S_initial, method='L-BFGS-B')
+            S_DC = result.x.reshape(N, N)
+
+        elif method == 'svd':
+            # Use SVD based singular value clipping
+
+            # Singular value decomposition
+            u, sigma, vh = np.linalg.svd(S_DC, full_matrices=False)
+
+            # Set all sigma that are >= 1 to 1
+            sigma[sigma >= 1] = 1
+
+            # Calculate new S_DC
+            S_DC = (u * sigma) @ vh
 
         # Post-passsivity enforcement passivity check
         singular_values = np.linalg.svd(S_DC, compute_uv=False)
