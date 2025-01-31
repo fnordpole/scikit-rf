@@ -2696,7 +2696,7 @@ class VectorFitting:
                 # Process all responses that are part of this pole group
                 for i in map_sorted_unique_indices_pole_groups_to_i[idx_pole_group]:
                     # Get idx_response
-                    idx_response = j + n_ports * i
+                    idx_response = i * n_ports + j
                     idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
 
                     # Initialize idx_col_C to offset_col_C
@@ -2823,7 +2823,7 @@ class VectorFitting:
                 # Process all responses that are part of this pole group
                 for i in map_sorted_unique_indices_pole_groups_to_i[idx_pole_group]:
                     # Get idx_response
-                    idx_response = j + n_ports * i
+                    idx_response = i * n_ports + j
                     idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
 
                     # Initialize idx_col_C to offset_col_C
@@ -2972,7 +2972,7 @@ class VectorFitting:
                 # Process all responses that are part of this pole group
                 for i in map_sorted_unique_indices_pole_groups_to_i[idx_pole_group]:
                     # Get idx_response
-                    idx_response = j + n_ports * i
+                    idx_response = i * n_ports + j
                     idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
 
                     # Initialize idx_col_C to offset_col_C
@@ -3658,7 +3658,7 @@ class VectorFitting:
             # Calculate singular values at the center frequency between crossover frequencies to identify violations
             # Todo: What is faster, via state space or via model directly?
             S_probe = self._get_S_from_state_space_ABCDE(np.array([s_probe]), A, B, C, D, E)
-            # S_probe = self._get_S_from_model(np.array([s_probe]))
+            # S_probe2 = self._get_S_from_model(np.array([s_probe]))
 
             sigma = np.linalg.svd(S_probe[0], compute_uv=False)
 
@@ -4075,10 +4075,9 @@ class VectorFitting:
                              'not make any sense; you need to run vector_fit() with option `fit_proportional=False` '
                              'first.')
 
-        # Run passivity test first
+        # Return if passive
         if self.is_passive(parameter_type):
-            # Model is already passive; do nothing and return
-            logger.info('Passivity enforcement: The model is already passive. Nothing to do.')
+            logger.info('Model is passive. Skipping passivity enforcement')
             return
 
         # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
@@ -4098,7 +4097,7 @@ class VectorFitting:
             # to a passive region as specified in the paper.
             omega_highest_crossing = 1.5 * violation_bands[-1, 0]
             warnings.warn(
-                'Passivity enforcement: The passivity violations of this model are unbounded. '
+                'Passivity violations are unbounded. '
                 'Passivity enforcement might still work, but consider re-fitting with a lower number of poles '
                 'and/or without the constants (`fit_constant=False`) if the results are not satisfactory.',
                 UserWarning, stacklevel=2)
@@ -4152,8 +4151,6 @@ class VectorFitting:
         # Maximum singular value
         sigma_max = np.max(sigma)
 
-
-
         # Debug: Plot the frequency response of each singular value
         # import matplotlib.pyplot as plt
         # fig, ax = plt.subplots()
@@ -4167,7 +4164,7 @@ class VectorFitting:
 
         # Continue if model is non-passive
         if sigma_max > 1:
-            print(f'Starting asymptotic passivity enforcement. SigmaMax = {sigma_max:.3e}')
+            print(f'Starting asymptotic passivity enforcement.')
 
             # Set delta
             delta = 1
@@ -4242,15 +4239,6 @@ class VectorFitting:
             # Extract optimized C_viol
             flat_C_to_matrix_C(result.x, _C_modified)
 
-            # Calculate S_viol
-            S_viol_optimized = _C_modified @ B
-
-            # Singular value decomposition
-            u, sigma, vh = np.linalg.svd(S_viol_optimized, full_matrices=False)
-
-            # Maximum singular value
-            sigma_max = np.max(sigma)
-
             # Calculate dC/C
             C_modified_delta = _C_modified - C_modified
             C_modified_delta_norm_rel = \
@@ -4263,15 +4251,16 @@ class VectorFitting:
             # Update model
             self._passivity_update_model(C_modified_view)
 
-            print(f'Finished asymptotic passivity enforcement. SigmaMax = {sigma_max:.3e}')
+            print('Finished asymptotic passivity enforcement.')
+
+        else:
+            print('Model is asymptotically passive. Skipping asymptotic passivity enforcement.')
 
         # Return if passive
         if self.is_passive(parameter_type):
             # Model is passive
-            logger.info('Model is passive after asymptotic passivity enforcement.')
+            print('Model is passive. Skipping uniform passivity enforcement.')
             return
-        else:
-            logger.info('Model is not passive after asymptotic passivity enforcement.')
 
         # Uniform passivity enforcement
         print('Starting uniform passivity enforcement')
