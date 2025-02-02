@@ -146,51 +146,49 @@ class VectorFitting:
             return spurious
 
         # Define function for integration
-        def H_complex(s, r, p):
-            return np.abs(r / (1j * s - p) + np.conj(r) / (1j * s - np.conj(p)))**2
-        def H_real(s, r, p):
-            return np.abs(r / (1j * s - p) )**2
+        def H_complex(o, r, p):
+            return np.abs(r / (1j * o - p) + np.conj(r) / (1j * o - np.conj(p)))**2
+
+        def H_real(o, r, p):
+            return np.abs(r / (1j * o - p) )**2
 
         # Collects all norms
         norm2_complex = np.zeros((n_responses, len(indices_poles_complex)))
-        norm2_real = np.zeros((n_responses, len(indices_poles_real)))
+        norm2_all = np.zeros((n_responses, np.size(poles, axis = 0)))
 
         # Run for debug plotting
         # import matplotlib.pyplot as plt
         # omega_eval = np.linspace(omega_poles_min / 3, omega_poles_max * 3, 101)
 
-        for i in range(len(indices_poles_complex)):
-            for j in range(n_responses):
-                idx_pole_complex = indices_poles_complex[i]
-                y, err = integrate.quad(H_complex, omega_poles_min / 3, omega_poles_max*3,
-                                        args=(residues[j, idx_pole_complex], poles[idx_pole_complex]))
-                norm2_complex[j, i] = np.sqrt(y)
+        for idx_response in range(n_responses):
+            idx_pole_complex = 0
+            for idx_pole, pole in enumerate(poles):
+                    if np.imag(pole) == 0:
+                        # Real pole
+                        y, err = integrate.quad(H_real, omega_poles_min / 3, omega_poles_max*3,
+                                                args=(residues[idx_response, idx_pole], pole))
+                        norm2_all[idx_response, idx_pole] = np.sqrt(y)
+                    else:
+                        # Imag pole
+                        y, err = integrate.quad(H_complex, omega_poles_min / 3, omega_poles_max*3,
+                                                args=(residues[idx_response, idx_pole], pole))
+                        norm2_all[idx_response, idx_pole] = np.sqrt(y)
 
-                # Plot what has been integrated for debug
-                # fig, ax = plt.subplots()
-                # ax.grid()
-                # ax.plot(omega_eval, [f(s,residues[j, i], poles[i]) for s in omega_eval], linewidth=2.0)
-                # plt.show()
+                        norm2_complex[idx_response, idx_pole_complex] = np.sqrt(y)
+                        idx_pole_complex += 1
 
-        for i in range(len(indices_poles_real)):
-            for j in range(n_responses):
-                idx_pole_real = indices_poles_real[i]
-                y, err = integrate.quad(H_real, omega_poles_min / 3, omega_poles_max*3,
-                                        args=(residues[j, idx_pole_real], poles[idx_pole_real]))
-                norm2_real[j, i] = np.sqrt(y)
+                        # Debug:
+                        # Plot what has been integrated for debug
+                        # fig, ax = plt.subplots()
+                        # ax.grid()
+                        # ax.plot(omega_eval, [f(s,residues[j, i], poles[i]) for s in omega_eval], linewidth=2.0)
+                        # plt.show()
 
-                # Plot what has been integrated for debug
-                # fig, ax = plt.subplots()
-                # ax.grid()
-                # ax.plot(omega_eval, [f(s,residues[j, i], poles[i]) for s in omega_eval], linewidth=2.0)
-                # plt.show()
+        # Calculate mean norm of all pole residue terms
+        norm2_mean = np.mean(norm2_all)
 
-        if len(indices_poles_real) > 0:
-            norm2_all = (np.mean(norm2_complex) + np.mean(norm2_real)) / 2
-        else:
-            norm2_all = np.mean(norm2_complex)
-
-        spurious[indices_poles_complex] = np.all(norm2_complex / norm2_all < spurious_pole_threshold, axis=0)
+        # Set spurios flag if norm of complex pole residue term is contributing less than threshold to mean norm
+        spurious[indices_poles_complex] = np.all((norm2_complex / norm2_mean) < spurious_pole_threshold, axis=0)
 
         return spurious
 
@@ -246,7 +244,7 @@ class VectorFitting:
         # Check if passive
         singular_values = np.linalg.svd(S_DC, compute_uv=False)
         max_singular_value = np.max(singular_values)
-        is_passive = max_singular_value <= 1
+        is_passive = max_singular_value < 1
 
         # Return if passive
         if is_passive:
@@ -277,7 +275,7 @@ class VectorFitting:
                 # Calculate fidelity term based on maximum singular value
                 S = S_flat.reshape(N, N)
                 singular_values = np.linalg.svd(S, compute_uv=False)
-                fidelity_term = alpha * (np.max(singular_values) - 1)
+                fidelity_term = alpha * (np.max(singular_values) - (1 - 1e-12))
                 if fidelity_term < 0:
                     fidelity_term = 0
 
@@ -297,7 +295,9 @@ class VectorFitting:
             u, sigma, vh = np.linalg.svd(S_DC, full_matrices=False)
 
             # Set all sigma that are >= 1 to 1
-            sigma[sigma >= 1] = 1
+            # Note: Setting to exactly 1 can lead to passivity tests failing because of precision problems.
+            # Thus, I subtract 1 - 1e-12 instead
+            sigma[sigma >= 1] = 1 - 1e-12
 
             # Calculate new S_DC
             S_DC = (u * sigma) @ vh
@@ -979,7 +979,7 @@ class VectorFitting:
         iteration=0
 
         # Minimum spacing of added poles to existing poles
-        delta_omega_min = (omega[1] - omega[0])*1.0
+        delta_omega_min = (omega[1] - omega[0]) * 1.0
 
         # Pole skimming and adding loop
         while True:
@@ -1055,6 +1055,8 @@ class VectorFitting:
         logger.info('Final pole relocation')
         spurious = self.get_spurious(poles, residues, spurious_pole_threshold)
         poles = poles[~spurious]
+        n_poles_skimmed = np.sum(spurious)
+        logger.info(f'n_poles_skimmed = {n_poles_skimmed}')
 
         # Final pole relocation
         for _ in range(n_iterations_post):
