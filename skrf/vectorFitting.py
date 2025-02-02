@@ -4092,7 +4092,7 @@ class VectorFitting:
 
         # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
         if np.isinf(omega_highest_crossing):
-            # The paper doesn't specify what to do in this case. It i set to 1.5 omega_start for now
+            # The paper doesn't specify what to do in this case. I set it to 1.5 omega_start for now
             # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
             # to a passive region as specified in the paper.
             omega_highest_crossing = 1.5 * violation_bands[-1, 0]
@@ -4143,7 +4143,6 @@ class VectorFitting:
             self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
 
         # Asymptotic passivity enforcement.
-        # TODO: The optimizer code etc is completely untested! I guess it does not work yet.
 
         # Singular value decomposition
         u, sigma, vh = np.linalg.svd(D, full_matrices=False)
@@ -4179,12 +4178,7 @@ class VectorFitting:
             S_viol = (u * sigma) @ vh
 
             # Original response
-            # S_original = C_modified @ F_modified + D_modified # See cost_function
-
-            # Weighting factors
-            alpha = 1.0  # Weight for equation fidelity
-            beta = 1.0   # Weight for preserving original model
-            # gamma = 0.01 # Regularization weight for smoothness. See cost_function
+            #S_original = C_modified @ F_modified + D_modified # See cost_function
 
             # Create working copy of C_modified for optimization
             _C_modified = np.copy(C_modified)
@@ -4197,8 +4191,24 @@ class VectorFitting:
                         j_beg = C_col_idx_begin[i][j]
                         j_end = C_col_idx_end[i][j]
                         n = j_end - j_beg
-                        C_matrix[i, j_beg:j_end] =  C_flat[offs:offs + n]
+                        C_matrix[i, j_beg:j_end] = C_flat[offs:offs + n]
                         offs += n
+
+            def matrix_C_to_flat_C(C_flat, C_matrix):
+                # Reshape the flat C vector into matrix form
+                offs = 0
+                for i in range(n_ports):
+                    for j in range(n_ports):
+                        j_beg = C_col_idx_begin[i][j]
+                        j_end = C_col_idx_end[i][j]
+                        n = j_end - j_beg
+                        C_flat[offs : offs + n] = C_matrix[i, j_beg:j_end]
+                        offs += n
+
+            # Weighting factors for cost function
+            alpha = 100.0 # Weight for equation fidelity
+            beta = 1.0   # Weight for preserving original model
+            # gamma = 0.01 # Regularization weight for smoothness. See cost_function
 
             # Define cost function
             def cost_function(C_modified_flat):
@@ -4214,24 +4224,27 @@ class VectorFitting:
                 # Deviation from the original S matrix (all frequencies)
                 # Disabled because it is very costly
                 #
-                # S_modified = _C_modified @ F_modified + D_modified  # Assuming passivity adjustments
-                # deviation_term = 0
-                # for i in range(np.size(S_original, axis = 0)):
-                #     deviation_term += np.linalg.norm(S_original[i] - S_modified[i], ord='fro')**2
-                # deviation_term = beta * deviation_term / np.size(S_original, axis = 0)
+                #S_modified = (C_modified - _C_modified) @ F_modified + D_modified  # Assuming passivity adjustments
+                #deviation_term = 0
+                #for i in range(0, np.size(S_original, axis = 0), 20 ):
+                #    deviation_term += np.linalg.norm(S_original[i] - S_modified[i], ord='fro')**2
+                #deviation_term = beta * deviation_term# / np.size(S_original, axis = 0)
                 #
                 # Minimizing norm of dC instead
                 # Calculate dC
-                deviation_term = beta * np.linalg.norm(_C_modified - C_modified, ord = 'fro')
+                #deviation_term = beta * np.linalg.norm(_C_modified - C_modified, ord = 'fro')**2
+                deviation_term = beta * np.linalg.norm(_C_modified, ord = 'fro')**2
 
+                #print(f'f={fidelity_term} d={deviation_term}')
                 # Regularization for smoothness
                 #regularization_term = gamma * np.linalg.norm(_C_modified, ord='fro')**2
 
                 return fidelity_term + deviation_term# + regularization_term
 
             # Flatten the initial guess for C
-            C_modified_initial = np.copy(C_modified)
-            C_modified_initial_flat = C_modified_initial.flatten()
+            #C_modified_initial_flat = np.zeros(int(np.sum(nC)))
+            C_modified_initial_flat = np.dot(S_viol, np.linalg.pinv(B)).flatten()
+            #matrix_C_to_flat_C(C_modified_initial_flat, C_modified)
 
             # Optimization
             result = minimize(cost_function, C_modified_initial_flat, method='L-BFGS-B')
@@ -4240,9 +4253,8 @@ class VectorFitting:
             flat_C_to_matrix_C(result.x, _C_modified)
 
             # Calculate dC/C
-            C_modified_delta = _C_modified - C_modified
             C_modified_delta_norm_rel = \
-                np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified, ord='fro')
+                np.linalg.norm(_C_modified, ord='fro') / np.linalg.norm(C_modified, ord='fro')
             print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
 
             # Calculate C_asymp and subtract from C_modified
@@ -4264,9 +4276,6 @@ class VectorFitting:
 
         # Uniform passivity enforcement
         print('Starting uniform passivity enforcement')
-
-        # Initialize delta
-        delta = 1 - 1e-3
 
         # Get the number of ports
         n_ports = self._get_n_ports()
@@ -4299,8 +4308,6 @@ class VectorFitting:
         # Iterative compensation of passivity violations
         iteration = 0
         while iteration < max_iterations:
-
-            #logger.info(f'C_modified_in = {C_modified}')
             # Get S
             S = C_modified @ F_modified + D_modified
 
@@ -4322,8 +4329,50 @@ class VectorFitting:
             sigma_max = np.max(sigma)
             logger.info(f'Uniform passivity enforcement: Iteration {iteration + 1} SigmaMax = {sigma_max}')
 
+            # TODO: Improvement: Adaptive delta and adaptive sampling
+            # 1. The closer delta is to 1, the better will be the fit after the passivation.
+            #
+            # 2. For delta = 1 - epsilon, the convergence will be faster for larger epsilon.
+            #
+            # 3. The sigma_max will decrease while this loop is running until it is below 1.
+            #
+            # 4. If we have a large epsilon when this crossing happens, the model will be changed more than necessary.
+            #    resulting in a poorer fit after the passivation is done.
+            #
+            # 5. So what we actually want is a large epsilon in the beginning to converge fast and then, before we
+            #    cross the 1 boundary, we want a very small epsilon, to not cross the boundary by more than necessary.
+            #
+            # 6. So basically we could make epsilon really small before crossing 1, like 1e-9 ore something but it
+            #    turns out that even if the sigma_max is less than one after this, the algebraic passivity tests
+            #    will still show that the model is non passive in a very narrow frequency band.
+            #
+            #    The reason for this unexpected result is that this passivation algorithm is based on a sampled
+            #    evaluation of the sigmas with a "dense" set of frequencies. However, if the set is not dense enough,
+            #    it can easily happen that all sampled sigmas are below 1 but still some sigmas between two samples
+            #    can be above 1.
+            #
+            #   Now how is this related to epsilon? With a larger epsilon, we make a larger than necessary change
+            #   to the model, crossing the boundary to 1 and going even a bit further. This 'going further below 1'
+            #   helps to avoid the above described problem: Because we have now a sampled sigma that has quite a bit
+            #   of margin to the 1 border, it is less likely that there are sigmas between two samples that go above 1.
+            #
+            #   My experiments showed that if I increasse the number of samples in the "dense set of frequencies",
+            #   I can successfully go to 1e-4 or even lower with epsilon and still get a passive model. The only
+            #   drawback is that the passivation process will be really slow if we increase the number of samples
+            #   to a really high number.
+            #
+            # 7. Ideas to improve this: Adaptive sampling could be used that places much more samples inside of the
+            #   violation intervals but less outside of them. This could enable us to use much smaller epsilons whil
+            #   still get a passive model in the algegraic passivity tests.
+            #
+            # 8. Until this is implemented, I leave epsilon minimum at 1e-3.
+            #
+            epsilon = np.clip((sigma_max - 1) * 1.0, 1e-3, 1e-2)
+            print(f'delta=1-{epsilon:.3e}')
+            delta = 1 - epsilon
+
             # Stop iterations if model is passive
-            if sigma_max <= 1.0:
+            if sigma_max < 1.0:
                 break
 
             # Set all sigma that are <= delta to zero
