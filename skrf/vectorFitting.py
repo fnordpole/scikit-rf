@@ -4088,9 +4088,35 @@ class VectorFitting:
                     self.constant[idx_pole_group][idx_pole_group_member] = D[i, j]
 
     def _passivity_get_eval_frequencies(self,
-        violation_bands, highest_relevant_omega, n_samples, n_samples_per_band):
+        maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type):
         # Creates "dense set of frequencies" with n_samples from DC to highest_relevant_omega
         # and an additional n_samples_per_band for every violation band.
+
+        # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
+        # This highest relevant frequency is the maximum of the highest crossing from a nonpassive to a passive region
+        # on one hand and the maximum frequency of interest on the other hand [1]
+
+        # Get violation bands
+        violation_bands = self.passivity_test(parameter_type)
+
+        # Get highest crossing from a nonpassive to a passive region
+        omega_highest_crossing = violation_bands[-1, 1]
+
+        # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
+        if np.isinf(omega_highest_crossing):
+            # The paper doesn't specify what to do in this case. I set it to 1.5 omega_start for now
+            # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
+            # to a passive region as specified in the paper.
+            omega_highest_crossing = 1.5 * violation_bands[-1, 0]
+
+            # Update last violation band
+            violation_bands[-1, 1] =  omega_highest_crossing
+
+            warnings.warn('Passivity violations are unbounded',
+                UserWarning, stacklevel=2)
+
+        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
+        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
 
         # Create omega_eval for every violation band
         n_bands = np.size(violation_bands, axis = 0)
@@ -4133,47 +4159,19 @@ class VectorFitting:
             logger.info('Model is passive. Skipping passivity enforcement')
             return
 
-        # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
-        # This highest relevant frequency is the maximum of the highest crossing from a nonpassive to a passive region
-        # on one hand and the maximum frequency of interest on the other hand [1]
-
-        # Get violation bands
-        violation_bands = self.passivity_test(parameter_type)
-
-        # Get highest crossing from a nonpassive to a passive region
-        omega_highest_crossing = violation_bands[-1, 1]
-
-        # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
-        if np.isinf(omega_highest_crossing):
-            # The paper doesn't specify what to do in this case. I set it to 1.5 omega_start for now
-            # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
-            # to a passive region as specified in the paper.
-            omega_highest_crossing = 1.5 * violation_bands[-1, 0]
-
-            # Update last violation band
-            violation_bands[-1, 1] =  omega_highest_crossing
-
-            warnings.warn(
-                'Passivity violations are unbounded. '
-                'Passivity enforcement might still work, but consider re-fitting with a lower number of poles '
-                'and/or without the constants (`fit_constant=False`) if the results are not satisfactory.',
-                UserWarning, stacklevel=2)
-
         # Check if maximum_frequency_of_interest is specified
         if maximum_frequency_of_interest is None:
             # Check if we have a netwoork
             if self.network is None:
-                raise RuntimeError('Both `self.network` and parameter `maximum_frequency_of_interest` are None. One of them is required to '
-                                   'specify the frequency band of interest for the passivity enforcement.')
+                raise RuntimeError('Both `self.network` and parameter `maximum_frequency_of_interest` are None. '
+                                   'One of them is required to specify the frequency band of interest for the '
+                                   'passivity enforcement.')
             else:
                 # Set maximum_frequency_of_interest to highest frequency of network
                 maximum_frequency_of_interest = self.network.f[-1]
 
         # Calculate omega
         maximum_omega_of_interest = 2 * np.pi * maximum_frequency_of_interest
-
-        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
-        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
 
         # Get n_ports
         n_ports = self._get_n_ports()
@@ -4182,7 +4180,7 @@ class VectorFitting:
 
         # Get s_eval
         omega_eval, s_eval = self._passivity_get_eval_frequencies(
-            violation_bands, highest_relevant_omega, n_samples, n_samples_per_band)
+            maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type)
 
         # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
         F, F_modified, A, B, C, C_modified, D, D_modified, E, \
@@ -4244,7 +4242,7 @@ class VectorFitting:
                 C_modified_delta_norm_rel = \
                     np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_original, ord='fro')
                 print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
-                #print(f'delta: {C_modified_delta}')
+                print(f'delta: {C_modified_delta}')
 
             elif asymptotic_method == 'optimizer':
                 # Original response
@@ -4326,10 +4324,11 @@ class VectorFitting:
                 C_modified_delta_norm_rel = \
                     np.linalg.norm(_C_modified, ord='fro') / np.linalg.norm(C_modified, ord='fro')
                 print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
-                #print(f'delta: {-1 * _C_modified}')
+                print(f'delta: {-1 * _C_modified}')
                 # Calculate C_asymp and subtract from C_modified
                 C_modified -= _C_modified
 
+            print(f'C_modified={C_modified}')
             # Update model
             self._passivity_update_model(C_modified_view)
 
@@ -4342,20 +4341,19 @@ class VectorFitting:
                 return
 
             else:
-                # Update violation bands and state space model for uniform passivity enforcement
-
-                # Get violation bands
-                violation_bands = self.passivity_test(parameter_type)
+                # Update state space model for uniform passivity enforcement
 
                 # Get s_eval
                 omega_eval, s_eval = self._passivity_get_eval_frequencies(
-                    violation_bands, highest_relevant_omega, n_samples, n_samples_per_band)
+                    maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type)
 
                 # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
                 F, F_modified, A, B, C, C_modified, D, D_modified, E, \
                     F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
                     nC, C_col_idx_begin, C_col_idx_end = \
                     self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
+
+                logger.info("Updated model")
 
         else:
             print('Model is asymptotically passive. Skipping asymptotic passivity enforcement.')
