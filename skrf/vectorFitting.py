@@ -4342,28 +4342,28 @@ class VectorFitting:
             # 5. So what we actually want is a large epsilon in the beginning to converge fast and then, before we
             #    cross the 1 boundary, we want a very small epsilon, to not cross the boundary by more than necessary.
             #
-            # 6. So basically we could make epsilon really small before crossing 1, like 1e-9 ore something but it
+            # 6. So basically we could make epsilon really small before crossing 1, like 1e-9 or something but it
             #    turns out that even if the sigma_max is less than one after this, the algebraic passivity tests
-            #    will still show that the model is non passive in a very narrow frequency band.
+            #    in some cases still show that the model is non passive in a very narrow frequency band.
             #
             #    The reason for this unexpected result is that this passivation algorithm is based on a sampled
             #    evaluation of the sigmas with a "dense" set of frequencies. However, if the set is not dense enough,
             #    it can easily happen that all sampled sigmas are below 1 but still some sigmas between two samples
             #    can be above 1.
             #
-            #   Now how is this related to epsilon? With a larger epsilon, we make a larger than necessary change
-            #   to the model, crossing the boundary to 1 and going even a bit further. This 'going further below 1'
-            #   helps to avoid the above described problem: Because we have now a sampled sigma that has quite a bit
-            #   of margin to the 1 border, it is less likely that there are sigmas between two samples that go above 1.
+            #    Now how is this related to epsilon? With a larger epsilon, we make a larger than necessary change
+            #    to the model, crossing the boundary to 1 and going even a bit further. This 'going further below 1'
+            #    helps to avoid the above described problem: Because we have now a sampled sigma that has quite a bit
+            #    of margin to the 1 border, it is less likely that there are sigmas between two samples that go above 1.
             #
-            #   My experiments showed that if I increasse the number of samples in the "dense set of frequencies",
-            #   I can successfully go to 1e-4 or even lower with epsilon and still get a passive model. The only
-            #   drawback is that the passivation process will be really slow if we increase the number of samples
-            #   to a really high number.
+            #    My experiments showed that if I increasse the number of samples in the "dense set of frequencies",
+            #    I can successfully go to 1e-4 or even lower with epsilon and still get a passive model. The only
+            #    drawback is that the passivation process will be really slow if we increase the number of samples
+            #    to a really high number.
             #
             # 7. Ideas to improve this: Adaptive sampling could be used that places much more samples inside of the
-            #   violation intervals but less outside of them. This could enable us to use much smaller epsilons whil
-            #   still get a passive model in the algegraic passivity tests.
+            #    violation intervals but less outside of them. This could enable us to use much smaller epsilons whil
+            #    still get a passive model in the algegraic passivity tests.
             #
             # 8. Until this is implemented, I leave epsilon minimum at 1e-3.
             #
