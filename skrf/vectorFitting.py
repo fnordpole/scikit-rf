@@ -2992,24 +2992,30 @@ class VectorFitting:
                             idx_col_C += 2
 
                     if create_views:
+                        # Create view on A
+                        A_view[i][j] = A[offset_col_C:idx_col_C, offset_col_C:idx_col_C]
+
+                        # Create view on B
+                        B_view[i][j] = np.expand_dims(B[offset_col_C:idx_col_C, j], 1)
+
                         # Create view on C
                         C_view[i][j] = C[i, offset_col_C:idx_col_C]
 
                         # Create view on C_modified
                         C_modified_view[i][j] = C_modified[i, offset_col_C:idx_col_C]
 
-                        # Create nC
-                        nC[i, j] = idx_col_C - offset_col_C
-
-                        # Create view on C
-                        C_col_idx_begin[i][j] = offset_col_C
-                        C_col_idx_end[i][j] = idx_col_C
-
                         # Create view on F
                         F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
 
                         # Create view on F_modified
                         F_modified_view[i][j] = F_modified[:, offset_col_C:idx_col_C, j]
+
+                        # Create nC
+                        nC[i, j] = idx_col_C - offset_col_C
+
+                        # Create C columns index ranges
+                        C_col_idx_begin[i][j] = offset_col_C
+                        C_col_idx_end[i][j] = idx_col_C
 
                     # Create D and E
                     D[i, j] = constant[idx_pole_group_member]
@@ -3755,6 +3761,7 @@ class VectorFitting:
         max_iterations: int = 100,
         verbose = False,
         perturb_constant = False,
+        asymptotic_method = 'optimizer',
         ) -> None:
         """
         Enforces the passivity of the vector fitted model, if required. This is an implementation of the method
@@ -3819,7 +3826,8 @@ class VectorFitting:
 
 
         self._passivity_enforce_new(
-            n_samples, maximum_frequency_of_interest, parameter_type, max_iterations, verbose, perturb_constant)
+            n_samples, maximum_frequency_of_interest, parameter_type,
+            max_iterations, verbose, perturb_constant, asymptotic_method)
 
         # Print model summary
         self.print_model_summary(verbose)
@@ -4064,6 +4072,7 @@ class VectorFitting:
         max_iterations,
         verbose,
         perturb_constant,
+        asymptotic_method = 'least-squares',
         ) -> None:
         # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
 
@@ -4177,88 +4186,112 @@ class VectorFitting:
             # Calculate S_viol
             S_viol = (u * sigma) @ vh
 
-            # Original response
-            #S_original = C_modified @ F_modified + D_modified # See cost_function
+            if asymptotic_method == 'least-squares':
+                # Create copy of C_modified for comparison after passivity enforcement
+                C_modified_original = np.copy(C_modified)
 
-            # Create working copy of C_modified for optimization
-            _C_modified = np.copy(C_modified)
-
-            def flat_C_to_matrix_C(C_flat, C_matrix):
-                # Reshape the flat C vector into matrix form
-                offs = 0
                 for i in range(n_ports):
                     for j in range(n_ports):
-                        j_beg = C_col_idx_begin[i][j]
-                        j_end = C_col_idx_end[i][j]
-                        n = j_end - j_beg
-                        C_matrix[i, j_beg:j_end] = C_flat[offs:offs + n]
-                        offs += n
+                        # Prepare A_ls and b_ls
+                        A_ls = np.atleast_2d(B_view[i][j].T)
+                        b_ls = np.expand_dims(S_viol[i,j], 0)
 
-            def matrix_C_to_flat_C(C_flat, C_matrix):
-                # Reshape the flat C vector into matrix form
-                offs = 0
-                for i in range(n_ports):
-                    for j in range(n_ports):
-                        j_beg = C_col_idx_begin[i][j]
-                        j_end = C_col_idx_end[i][j]
-                        n = j_end - j_beg
-                        C_flat[offs : offs + n] = C_matrix[i, j_beg:j_end]
-                        offs += n
+                        # Solve underdetermined least squares
+                        x, residuals, rank, singular_values = np.linalg.lstsq(A_ls, b_ls, rcond=None)
 
-            # Weighting factors for cost function
-            alpha = 100.0 # Weight for equation fidelity
-            beta = 1.0   # Weight for preserving original model
-            # gamma = 0.01 # Regularization weight for smoothness. See cost_function
+                        # Update
+                        C_modified_view[i][j][:] -= x
 
-            # Define cost function
-            def cost_function(C_modified_flat):
-                # Reshape the flat C vector into matrix form
-                flat_C_to_matrix_C(C_modified_flat, _C_modified)
+                # Calculate dC/C
+                C_modified_delta = C_modified - C_modified_original
+                C_modified_delta_norm_rel = \
+                    np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_original, ord='fro')
+                print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
+                print(f'delta: {C_modified_delta}')
 
-                # Compute the reconstructed S_viol from C and B
-                S_viol_reconstructed = _C_modified @ B
+            elif asymptotic_method == 'optimizer':
+                # Original response
+                #S_original = C_modified @ F_modified + D_modified # See cost_function
 
-                # Fidelity to the equation S_viol = C * B
-                fidelity_term = alpha * np.linalg.norm(S_viol - S_viol_reconstructed, ord='fro')**2
+                # Create working copy of C_modified for optimization
+                _C_modified = np.copy(C_modified)
 
-                # Deviation from the original S matrix (all frequencies)
-                # Disabled because it is very costly
-                #
-                #S_modified = (C_modified - _C_modified) @ F_modified + D_modified  # Assuming passivity adjustments
-                #deviation_term = 0
-                #for i in range(0, np.size(S_original, axis = 0), 20 ):
-                #    deviation_term += np.linalg.norm(S_original[i] - S_modified[i], ord='fro')**2
-                #deviation_term = beta * deviation_term# / np.size(S_original, axis = 0)
-                #
-                # Minimizing norm of dC instead
-                # Calculate dC
-                #deviation_term = beta * np.linalg.norm(_C_modified - C_modified, ord = 'fro')**2
-                deviation_term = beta * np.linalg.norm(_C_modified, ord = 'fro')**2
+                def flat_C_to_matrix_C(C_flat, C_matrix):
+                    # Reshape the flat C vector into matrix form
+                    offs = 0
+                    for i in range(n_ports):
+                        for j in range(n_ports):
+                            j_beg = C_col_idx_begin[i][j]
+                            j_end = C_col_idx_end[i][j]
+                            n = j_end - j_beg
+                            C_matrix[i, j_beg:j_end] = C_flat[offs:offs + n]
+                            offs += n
 
-                #print(f'f={fidelity_term} d={deviation_term}')
-                # Regularization for smoothness
-                #regularization_term = gamma * np.linalg.norm(_C_modified, ord='fro')**2
+                def matrix_C_to_flat_C(C_flat, C_matrix):
+                    # Reshape the flat C vector into matrix form
+                    offs = 0
+                    for i in range(n_ports):
+                        for j in range(n_ports):
+                            j_beg = C_col_idx_begin[i][j]
+                            j_end = C_col_idx_end[i][j]
+                            n = j_end - j_beg
+                            C_flat[offs : offs + n] = C_matrix[i, j_beg:j_end]
+                            offs += n
 
-                return fidelity_term + deviation_term# + regularization_term
+                # Weighting factors for cost function
+                alpha = 100.0 # Weight for equation fidelity
+                beta = 1.0   # Weight for preserving original model
+                # gamma = 0.01 # Regularization weight for smoothness. See cost_function
 
-            # Flatten the initial guess for C
-            #C_modified_initial_flat = np.zeros(int(np.sum(nC)))
-            C_modified_initial_flat = np.dot(S_viol, np.linalg.pinv(B)).flatten()
-            #matrix_C_to_flat_C(C_modified_initial_flat, C_modified)
+                # Define cost function
+                def cost_function(C_modified_flat):
+                    # Reshape the flat C vector into matrix form
+                    flat_C_to_matrix_C(C_modified_flat, _C_modified)
 
-            # Optimization
-            result = minimize(cost_function, C_modified_initial_flat, method='L-BFGS-B')
+                    # Compute the reconstructed S_viol from C and B
+                    S_viol_reconstructed = _C_modified @ B
 
-            # Extract optimized C_viol
-            flat_C_to_matrix_C(result.x, _C_modified)
+                    # Fidelity to the equation S_viol = C * B
+                    fidelity_term = alpha * np.linalg.norm(S_viol - S_viol_reconstructed, ord='fro')**2
 
-            # Calculate dC/C
-            C_modified_delta_norm_rel = \
-                np.linalg.norm(_C_modified, ord='fro') / np.linalg.norm(C_modified, ord='fro')
-            print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
+                    # Deviation from the original S matrix (all frequencies)
+                    # Disabled because it is very costly
+                    #
+                    #S_modified = (C_modified - _C_modified) @ F_modified + D_modified  # Assuming passivity adjustments
+                    #deviation_term = 0
+                    #for i in range(0, np.size(S_original, axis = 0), 20 ):
+                    #    deviation_term += np.linalg.norm(S_original[i] - S_modified[i], ord='fro')**2
+                    #deviation_term = beta * deviation_term# / np.size(S_original, axis = 0)
+                    #
+                    # Minimizing norm of dC instead
+                    # Calculate dC
+                    #deviation_term = beta * np.linalg.norm(_C_modified - C_modified, ord = 'fro')**2
+                    deviation_term = beta * np.linalg.norm(_C_modified, ord = 'fro')**2
 
-            # Calculate C_asymp and subtract from C_modified
-            C_modified -= _C_modified
+                    #print(f'f={fidelity_term} d={deviation_term}')
+                    # Regularization for smoothness
+                    #regularization_term = gamma * np.linalg.norm(_C_modified, ord='fro')**2
+
+                    return fidelity_term + deviation_term# + regularization_term
+
+                # Flatten the initial guess for C
+                #C_modified_initial_flat = np.zeros(int(np.sum(nC)))
+                C_modified_initial_flat = np.dot(S_viol, np.linalg.pinv(B)).flatten()
+                #matrix_C_to_flat_C(C_modified_initial_flat, C_modified)
+
+                # Optimization
+                result = minimize(cost_function, C_modified_initial_flat, method='L-BFGS-B')
+
+                # Extract optimized C_viol
+                flat_C_to_matrix_C(result.x, _C_modified)
+
+                # Calculate dC/C
+                C_modified_delta_norm_rel = \
+                    np.linalg.norm(_C_modified, ord='fro') / np.linalg.norm(C_modified, ord='fro')
+                print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
+                print(f'delta: {-1 * _C_modified}')
+                # Calculate C_asymp and subtract from C_modified
+                C_modified -= _C_modified
 
             # Update model
             self._passivity_update_model(C_modified_view)
