@@ -4362,8 +4362,8 @@ class VectorFitting:
             #    to a really high number.
             #
             # 7. Ideas to improve this: Adaptive sampling could be used that places much more samples inside of the
-            #    violation intervals but less outside of them. This could enable us to use much smaller epsilons whil
-            #    still get a passive model in the algegraic passivity tests.
+            #    violation intervals but less outside of them. This could enable us to use much smaller epsilons while
+            #    still getting a passive model in the algegraic passivity tests.
             #
             # 8. Until this is implemented, I leave epsilon minimum at 1e-3.
             #
