@@ -3464,6 +3464,8 @@ class VectorFitting:
         verbose: bool = False,
         method = None,
         reltol_hamiltonian = 1e-3,
+        n_samples_sampling = 10000,
+        range_sampling = None,
         ):
         """
         Evaluates the passivity of reciprocal vector fitted models by means of a half-size test matrix [#]_. Any
@@ -3523,7 +3525,8 @@ class VectorFitting:
                              'first.')
 
         # Return only the violation bands for the specified pole group
-        violation_bands = self._passivity_test(verbose, method, reltol_hamiltonian)
+        violation_bands = self._passivity_test(
+            verbose, method, reltol_hamiltonian, n_samples_sampling, range_sampling)
 
         return violation_bands
 
@@ -3531,7 +3534,10 @@ class VectorFitting:
         verbose = False,
         method = None,
         reltol_hamiltonian = 1e-3,
+        n_samples_sampling = 20000,
+        range_sampling = None,
         ) -> np.ndarray:
+
         # Runs either the half size or hamiltonian passivity test, depending on symmetry.
         # Description of arguments see passivity_test
         #
@@ -3546,24 +3552,44 @@ class VectorFitting:
         #
         # Note: I leave it at default atol for now but this should be investigated and maybe adjusted.
 
+        # Check symmetry
+        is_symmetric = self.is_symmetric()
+
+        # Run sampling test if requested
+        if method is not None:
+            method = method.lower()
+            if method == 'sampling':
+                if verbose:
+                    print("Using sampling based passivity test on request")
+                return self._passivity_test_sampling(n_samples_sampling, range_sampling)
+
+            elif method == 'hamiltonian':
+                if verbose:
+                    print("Using full size hamiltonian passivity test on request")
+                return self._passivity_test_hamiltonian(reltol_hamiltonian)
+
+            elif method == 'half-size':
+                if verbose:
+                    print("Using half size passivity test on request")
+
+                # Warn if not symmetric
+                if not is_symmetric:
+                    warnings.warn('Using half size passivity test but matrix is not symmetric. Expect '
+                                  'wrong results.', RuntimeWarning, stacklevel=2)
+                return self._passivity_test_half_size()
+            else:
+                warnings.warn('Unknown passivity test method specified ', RuntimeWarning, stacklevel=2)
+
+        # Not method specified
+
         # Run passivity test depending on symmetry
-        if not self.is_symmetric():
-            # If not symmetric we always use the hamiltonian test regardless of method requested
+        if not is_symmetric:
+            # If not symmetric we always use the hamiltonian test
             if verbose:
                 print("Matrix is not symmetric. Using full size hamiltonian passivity test.")
             return self._passivity_test_hamiltonian(reltol_hamiltonian)
         else:
-            # If symmetric, we use half-size by default but we use hamiltonian if requested via method
-
-            # Check if method is set
-            if method is not None:
-                # Check if it is hamiltonian
-                if method.lower() == 'hamiltonian':
-                    if verbose:
-                        print("Matrix is symmetric. Using full size hamiltonian passivity test on request")
-                    return self._passivity_test_hamiltonian(reltol_hamiltonian)
-
-            # Otherwise use half size as default
+            # If symmetric, we use half-size by default
             if verbose:
                 print("Matrix is symmetric. Using fast half size passivity test.")
             return self._passivity_test_half_size()
@@ -3654,6 +3680,64 @@ class VectorFitting:
         violation_bands = self._get_violation_bands(A, B, C, D, E, crossover_omegas)
 
         return violation_bands
+
+    def _passivity_test_sampling(self, n_samples, range_sampling) -> np.ndarray:
+        # Sampling based passivity test. Least reliable because violations can easily be missed if they occur
+        # between two consecutive samples.
+
+        # Get min and max omega
+        if range_sampling is not None:
+            omega_min = range_sampling[0]
+            omega_max = range_sampling[1]
+        else:
+            omega_min = 0
+            omega_max = 2 * np.pi * self.network.f[-1] * 10
+
+        # Create frequencies for sampling
+        omega_eval = np.linspace(omega_min, omega_max, n_samples)
+        s_eval = 1j * omega_eval
+
+        print(f'Sampling based passivity test: range=[{omega_min:.1e}, {omega_max:.1e}] delta={omega_eval[1] - omega_eval[0]:.1e}')
+
+        # Calculate singular values for all sampling frequencies
+        u, sigma, vh = np.linalg.svd(self._get_S_from_model(s_eval))
+
+        # Get maximum over all sigmas
+        sigma = np.max(sigma, axis = 1)
+
+        # Initialize violation bands list
+        violation_bands = []
+
+        # Convert sigma to list
+        sigma = sigma.tolist()
+
+        # Flag that is true if we are inside of a voilation band
+        is_inside_band = False
+
+        # Check if first sigma is above 1
+        if sigma[0] > 1:
+            current_band = [0, 0]
+            is_inside_band = True
+
+        for i, sigma in enumerate(sigma):
+            if is_inside_band and sigma < 1:
+                current_band[1] = omega_eval[i - 1]
+                violation_bands.append(current_band)
+                is_inside_band = False
+                continue
+
+            if sigma > 1 and not is_inside_band:
+                # Start a new band
+                current_band = [omega_eval[i], omega_eval[i]]
+                is_inside_band = True
+
+        # Check last band
+        if is_inside_band:
+            current_band[1] = float('Inf')
+            violation_bands.append(current_band)
+            is_inside_band = False
+
+        return np.array(violation_bands)
 
     def _get_violation_bands(self, A, B, C, D, E, crossover_omegas) -> np.ndarray:
         # Calculates the violation bands at which the singular values are above unity.
