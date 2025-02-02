@@ -4089,17 +4089,19 @@ class VectorFitting:
 
     def _passivity_get_eval_frequencies(self,
         violation_bands, highest_relevant_omega, n_samples, n_samples_per_band):
+        # Creates "dense set of frequencies" with n_samples from DC to highest_relevant_omega
+        # and an additional n_samples_per_band for every violation band.
 
         # Create omega_eval for every violation band
         n_bands = np.size(violation_bands, axis = 0)
         omega_eval_bands = np.empty((n_bands, n_samples_per_band))
         for i in range(n_bands):
             omega_eval_bands[i] = \
-                2 * np.pi * np.linspace(violation_bands[i, 0], violation_bands[i, 1], n_samples_per_band)
+                np.linspace(violation_bands[i, 0], violation_bands[i, 1], n_samples_per_band)
 
         # Create omega_eval and s_eval
         omega_eval = np.append(
-            2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples),
+            np.linspace(0, 1.2 * highest_relevant_omega, n_samples),
             omega_eval_bands.flatten())
 
         s_eval = 1j * omega_eval
