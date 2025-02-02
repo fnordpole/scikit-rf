@@ -1395,11 +1395,36 @@ class VectorFitting:
 
         n_ports=self._get_n_ports()
         print('Model summary:')
+
+        n_pole_groups=len(self.poles)
+
+        if not verbose:
+            print('Run print_model_summary(verbose=True) for an extended summary')
+        else:
+            for idx_pole_group in range(n_pole_groups):
+                indices_responses=np.nonzero(self.map_idx_response_to_idx_pole_group == idx_pole_group)[0]
+                i = np.floor(indices_responses / n_ports).astype(int)
+                j = np.mod(indices_responses, n_ports)
+                member_responses = ' '.join(map(lambda x: f'({i[x] + 1}, {j[x] + 1})', range(len(i))))
+                print(f'Pole group {idx_pole_group+1}:')
+                print(f'\tModel order = {self.get_model_order(idx_pole_group)}')
+                print(f'\tNumber of real poles = {self.get_n_poles_real(idx_pole_group)}')
+                print(f'\tNumber of complex conjugate pole pairs = {self.get_n_poles_complex(idx_pole_group)}')
+                print(f'\tMember responses = {member_responses}')
+
+            if self.network:
+                abs_err=self.get_abs_error_vs_responses()
+                rel_err=self.get_rel_error_vs_responses()
+                for i in range(n_ports):
+                    for j in range(n_ports):
+                        print(f'Response ({i+1}, {j+1}): AbsErr={abs_err[i, j]:.4e} RelErr={rel_err[i, j]:.4e}')
+
         print(f'Number of ports = {n_ports}')
         print(f'Number of responses = {n_ports**2}')
         print(f'Model order = {self.get_model_order()}')
         print(f'Number of real poles = {self.get_n_poles_real()}')
         print(f'Number of complex conjugate pole pairs = {self.get_n_poles_complex()}')
+        print(f'Number of pole groups = {n_pole_groups}')
 
         if self.network:
             print(f'Total absolute error (RMS) = {self.get_total_abs_error():.4e}')
@@ -1414,31 +1439,6 @@ class VectorFitting:
             print(f'Model is passive = {self.is_passive()}')
         else:
             print('Model is passive = unknown (Passivity test works only for models without proportional terms)')
-
-        n_pole_groups=len(self.poles)
-        print(f'Number of pole groups = {n_pole_groups}')
-
-        if not verbose:
-            print('Run print_model_summary(verbose=True) for an extended summary')
-            return
-
-        for idx_pole_group in range(n_pole_groups):
-            indices_responses=np.nonzero(self.map_idx_response_to_idx_pole_group == idx_pole_group)[0]
-            i = np.floor(indices_responses / n_ports).astype(int)
-            j = np.mod(indices_responses, n_ports)
-            member_responses = ' '.join(map(lambda x: f'({i[x] + 1}, {j[x] + 1})', range(len(i))))
-            print(f'Pole group {idx_pole_group+1}:')
-            print(f'\tModel order = {self.get_model_order(idx_pole_group)}')
-            print(f'\tNumber of real poles = {self.get_n_poles_real(idx_pole_group)}')
-            print(f'\tNumber of complex conjugate pole pairs = {self.get_n_poles_complex(idx_pole_group)}')
-            print(f'\tMember responses = {member_responses}')
-
-        if self.network:
-            abs_err=self.get_abs_error_vs_responses()
-            rel_err=self.get_rel_error_vs_responses()
-            for i in range(n_ports):
-                for j in range(n_ports):
-                    print(f'Response ({i+1}, {j+1}): AbsErr={abs_err[i, j]:.4e} RelErr={rel_err[i, j]:.4e}')
 
     def _get_n_ports(self, idx_pole_group = None):
         # Returns the number of ports derived from self.map_idx_response_to_idx_pole_group
@@ -2864,6 +2864,28 @@ class VectorFitting:
         # In the calculation of F no direct inversion is used and the diagonality properties are
         # used to efficiently invert it. Also the matrix multiplication with B is efficiently calculated
         # as an element wise multiplication instead. This is possible because also the inverted matrix is diagonal.
+
+        # Debug: Use this code to check if views work as expected:
+        # It should print OK for every response
+        #
+        # freqs = np.linspace(np.min(vf.network.f), np.max(vf.network.f), 201)
+        # s_eval = 2j * np.pi * freqs
+        # F, F_modified, A, B, C, C_modified, D, D_modified, E, \
+        #     F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+        #     nC, C_col_idx_begin, C_col_idx_end = \
+        #     vf._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
+        # S_modified = C_modified @ F_modified + D_modified
+        # S = C @ F + D
+        # for i in range(n_ports):
+        #     for j in range(n_ports):
+        #         Sij_modified = np.expand_dims(C_modified_view[i][j], 0) @ F_modified_view[i][j].T + D_modified[i, j]
+        #         Sij = np.expand_dims(C_view[i][j], 0) @ F_view[i][j].T + D[i, j]
+        #         if np.allclose(Sij_modified, S_modified[:, i, j]) \
+        #             and np.allclose(Sij, S[:, i, j])\
+        #             and np.allclose(Sij, Sij_modified):
+        #             print(f'OK {i} {j}')
+        #
+        # End of debug code
 
         # Get total number of ports including all pole groups
         n_ports = self._get_n_ports()
@@ -4401,7 +4423,7 @@ class VectorFitting:
             # 8. Until this is implemented, I leave epsilon minimum at 1e-3.
             #
             epsilon = np.clip((sigma_max - 1) * 1.0, 1e-3, 1e-2)
-            print(f'delta=1-{epsilon:.3e}')
+            logger.info(f'delta=1-{epsilon:.3e}')
             delta = 1 - epsilon
 
             # Stop iterations if model is passive
