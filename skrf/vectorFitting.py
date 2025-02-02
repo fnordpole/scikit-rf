@@ -3778,6 +3778,7 @@ class VectorFitting:
 
     def passivity_enforce(self,
         n_samples: int = 200,
+        n_samples_per_band: int = 200,
         maximum_frequency_of_interest: float = None,
         parameter_type: str = 's',
         max_iterations: int = 100,
@@ -3846,9 +3847,8 @@ class VectorFitting:
             Feb. 2009, DOI: 10.1109/TMTT.2008.2011201.
         """
 
-
         self._passivity_enforce_new(
-            n_samples, maximum_frequency_of_interest, parameter_type,
+            n_samples, n_samples_per_band, maximum_frequency_of_interest, parameter_type,
             max_iterations, verbose, perturb_constant, asymptotic_method)
 
         # Print model summary
@@ -4087,8 +4087,28 @@ class VectorFitting:
                     idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
                     self.constant[idx_pole_group][idx_pole_group_member] = D[i, j]
 
+    def _passivity_get_eval_frequencies(self,
+        violation_bands, highest_relevant_omega, n_samples, n_samples_per_band):
+
+        # Create omega_eval for every violation band
+        n_bands = np.size(violation_bands, axis = 0)
+        omega_eval_bands = np.empty((n_bands, n_samples_per_band))
+        for i in range(n_bands):
+            omega_eval_bands[i] = \
+                2 * np.pi * np.linspace(violation_bands[i, 0], violation_bands[i, 1], n_samples_per_band)
+
+        # Create omega_eval and s_eval
+        omega_eval = np.append(
+            2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples),
+            omega_eval_bands.flatten())
+
+        s_eval = 1j * omega_eval
+
+        return omega_eval, s_eval
+
     def _passivity_enforce_new(self,
         n_samples,
+        n_samples_per_band,
         maximum_frequency_of_interest,
         parameter_type,
         max_iterations,
@@ -4127,6 +4147,10 @@ class VectorFitting:
             # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
             # to a passive region as specified in the paper.
             omega_highest_crossing = 1.5 * violation_bands[-1, 0]
+
+            # Update last violation band
+            violation_bands[-1, 1] =  omega_highest_crossing
+
             warnings.warn(
                 'Passivity violations are unbounded. '
                 'Passivity enforcement might still work, but consider re-fitting with a lower number of poles '
@@ -4149,31 +4173,20 @@ class VectorFitting:
         # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
         highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
 
-        # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
-        # would happen if it's not dense enough.
-        omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
-        s_eval = 1j * omega_eval
-
         # Get n_ports
         n_ports = self._get_n_ports()
 
-        # Notes on parameter delta:
-        #
-        # Tolerance parameter according to paper. Unfortunately it does not provide any information on
-        # how this parameter influences the algorithm.
-        #
-        # This parameter has a really strong influence on the rms error in some tests I ran. Using 1-1e-4 instead
-        # of 1-1e-3 resulted in about 100x less rms error. On the other hand, it does not converge for 1-1e-5.
-        # So this algorithm seems to be extremely sensitive to the value of delta which is contradicting the
-        # paper that's not specific about the value of delta.
+        # Asymptotic passivity enforcement.
+
+        # Get s_eval
+        omega_eval, s_eval = self._passivity_get_eval_frequencies(
+            violation_bands, highest_relevant_omega, n_samples, n_samples_per_band)
 
         # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
         F, F_modified, A, B, C, C_modified, D, D_modified, E, \
             F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
             nC, C_col_idx_begin, C_col_idx_end = \
             self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
-
-        # Asymptotic passivity enforcement.
 
         # Singular value decomposition
         u, sigma, vh = np.linalg.svd(D, full_matrices=False)
@@ -4229,7 +4242,7 @@ class VectorFitting:
                 C_modified_delta_norm_rel = \
                     np.linalg.norm(C_modified_delta, ord='fro') / np.linalg.norm(C_modified_original, ord='fro')
                 print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
-                print(f'delta: {C_modified_delta}')
+                #print(f'delta: {C_modified_delta}')
 
             elif asymptotic_method == 'optimizer':
                 # Original response
@@ -4311,7 +4324,7 @@ class VectorFitting:
                 C_modified_delta_norm_rel = \
                     np.linalg.norm(_C_modified, ord='fro') / np.linalg.norm(C_modified, ord='fro')
                 print(f'Asymptotic passivity enforcement dC/C = {C_modified_delta_norm_rel:.1e}')
-                print(f'delta: {-1 * _C_modified}')
+                #print(f'delta: {-1 * _C_modified}')
                 # Calculate C_asymp and subtract from C_modified
                 C_modified -= _C_modified
 
@@ -4320,20 +4333,33 @@ class VectorFitting:
 
             print('Finished asymptotic passivity enforcement.')
 
+            # Return if passive
+            if self.is_passive(parameter_type):
+                # Model is passive
+                print('Model is passive. Skipping uniform passivity enforcement.')
+                return
+
+            else:
+                # Update violation bands and state space model for uniform passivity enforcement
+
+                # Get violation bands
+                violation_bands = self.passivity_test(parameter_type)
+
+                # Get s_eval
+                omega_eval, s_eval = self._passivity_get_eval_frequencies(
+                    violation_bands, highest_relevant_omega, n_samples, n_samples_per_band)
+
+                # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
+                F, F_modified, A, B, C, C_modified, D, D_modified, E, \
+                    F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+                    nC, C_col_idx_begin, C_col_idx_end = \
+                    self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
+
         else:
             print('Model is asymptotically passive. Skipping asymptotic passivity enforcement.')
 
-        # Return if passive
-        if self.is_passive(parameter_type):
-            # Model is passive
-            print('Model is passive. Skipping uniform passivity enforcement.')
-            return
-
         # Uniform passivity enforcement
         print('Starting uniform passivity enforcement')
-
-        # Get the number of ports
-        n_ports = self._get_n_ports()
 
         # Initialize A_ls as a two dimensional list with None for the least squares
         A_ls = [x[:] for x in [[None] * n_ports] * n_ports]
@@ -4420,9 +4446,7 @@ class VectorFitting:
             #    violation intervals but less outside of them. This could enable us to use much smaller epsilons while
             #    still getting a passive model in the algegraic passivity tests.
             #
-            # 8. Until this is implemented, I leave epsilon minimum at 1e-3.
-            #
-            epsilon = np.clip((sigma_max - 1) * 1.0, 1e-3, 1e-2)
+            epsilon = np.clip((sigma_max - 1) * 1.0, 1e-4, 1e-2)
             logger.info(f'delta=1-{epsilon:.3e}')
             delta = 1 - epsilon
 
