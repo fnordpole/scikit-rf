@@ -146,31 +146,39 @@ class VectorFitting:
             return spurious
 
         # Define function for integration
-        def H_complex(o, r, p):
-            return np.abs(r / (1j * o - p) + np.conj(r) / (1j * o - np.conj(p)))**2
+        def H_complex(omega, residue, pole):
+            s = 1j * omega
+            return np.abs(residue / (s - pole) + np.conj(residue) / (s - np.conj(pole)))**2
 
-        def H_real(o, r, p):
-            return np.abs(r / (1j * o - p) )**2
+        def H_real(omega, residue, pole):
+            s = 1j * omega
+            return np.abs(residue / (s - pole) )**2
 
         # Collects all norms
         norm2_complex = np.zeros((n_responses, len(indices_poles_complex)))
+        norm2_real = np.zeros((n_responses, len(indices_poles_real)))
         norm2_all = np.zeros((n_responses, np.size(poles, axis = 0)))
 
         # Run for debug plotting
         # import matplotlib.pyplot as plt
         # omega_eval = np.linspace(omega_poles_min / 3, omega_poles_max * 3, 101)
 
+        integrate_from = omega_poles_min / 3
+        integrate_to = omega_poles_max * 3
         for idx_response in range(n_responses):
             idx_pole_complex = 0
+            idx_pole_real = 0
             for idx_pole, pole in enumerate(poles):
                     if np.imag(pole) == 0:
                         # Real pole
-                        y, err = integrate.quad(H_real, omega_poles_min / 3, omega_poles_max*3,
+                        y, err = integrate.quad(H_real, integrate_from, integrate_to,
                                                 args=(residues[idx_response, idx_pole], pole))
                         norm2_all[idx_response, idx_pole] = np.sqrt(y)
+                        norm2_real[idx_response, idx_pole_real] = np.sqrt(y)
+                        idx_pole_real += 1
                     else:
                         # Imag pole
-                        y, err = integrate.quad(H_complex, omega_poles_min / 3, omega_poles_max*3,
+                        y, err = integrate.quad(H_complex, integrate_from, integrate_to,
                                                 args=(residues[idx_response, idx_pole], pole))
                         norm2_all[idx_response, idx_pole] = np.sqrt(y)
 
@@ -186,8 +194,10 @@ class VectorFitting:
 
         # Calculate mean norm of all pole residue terms
         norm2_mean = np.mean(norm2_all)
+        norm2_complex_mean = np.mean(norm2_all)
 
         # Set spurios flag if norm of complex pole residue term is contributing less than threshold to mean norm
+        # TODO: Is the reference the norm2_mean or norm2_complex_mean?
         spurious[indices_poles_complex] = np.all((norm2_complex / norm2_mean) < spurious_pole_threshold, axis=0)
 
         return spurious
