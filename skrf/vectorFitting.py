@@ -458,6 +458,8 @@ class VectorFitting:
 
         fit_constant: bool, optional
             Decide whether the constant term d is fitted or not.
+            If dc_preserving_fit is True, fit_constant is ignored and the DC point will always be set to the
+            exact value of the data at DC.
 
         fit_proportional: bool, optional
             Decide whether the proportional term e is fitted or not.
@@ -545,7 +547,7 @@ class VectorFitting:
             weights=self._get_weights(weighting, weighting_accuracy_db, responses)
 
         # Initialize pole sharing
-        self._init_pole_sharing(pole_sharing, n_responses, pole_groups)
+        self._initialize_pole_sharing(pole_sharing, n_responses, pole_groups)
         n_pole_groups = len(self.poles)
 
         # Convert n_poles_init to list if it is provided as an int
@@ -580,14 +582,14 @@ class VectorFitting:
                 poles = poles_init[idx_pole_group]
 
             # Call _vector_fit
-            poles, residues, residues_modified, constant, constant_modified, proportional = self._vector_fit(
+            poles, residues, constant, proportional = self._vector_fit(
                 poles, omega, responses[indices_responses], weights[indices_responses],
-                fit_constant, fit_proportional, memory_saver,
+                fit_constant, fit_proportional, memory_saver, dc_preserving_fit,
                 max_iterations, stagnation_threshold, abstol)
 
             # Save results
             self._save_results(
-                poles, residues, residues_modified, constant, constant_modified, proportional, idx_pole_group)
+                poles, residues, constant, proportional, idx_pole_group)
 
             logger.info(f'Finished vector_fit for pole group {idx_pole_group+1} of {n_pole_groups}')
 
@@ -598,7 +600,7 @@ class VectorFitting:
         self.print_model_summary(verbose)
 
     def _vector_fit(self, poles, omega, responses, weights, fit_constant, fit_proportional,
-                    memory_saver, max_iterations, stagnation_threshold, abstol):
+                    memory_saver, dc_preserving_fit, max_iterations, stagnation_threshold, abstol):
         # This implements the core algorithm of vector fitting.
         # _vector_fit is called by vector_fit. For a description of the arguments see vector_fit.
 
@@ -613,8 +615,8 @@ class VectorFitting:
             logger.info(f'Iteration {iteration}')
 
             # Relocate poles
-            poles, d_tilde = self._relocate_poles(poles, omega, responses, weights,
-                                                  fit_proportional, memory_saver)
+            poles, d_tilde = self._relocate_poles(
+                poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
 
             # Check relative change of maximum singular value in A_dense stopping condition
             dRelMaxSv=self.delta_rel_max_singular_value_A_dense_history[-1]
@@ -626,8 +628,8 @@ class VectorFitting:
             # Check absolute error stopping condition only every 25 iterations
             if np.mod(iteration, 25) == 0:
                 # Fit residues with the previously calculated poles
-                residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
-                    poles, omega, responses, weights, fit_proportional)
+                residues, constant, proportional = self._fit_residues(
+                    poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
 
                 # Calculate error_max
                 error_max = np.max(self._get_delta(poles, residues, constant, proportional, omega, responses, weights))
@@ -662,10 +664,10 @@ class VectorFitting:
             iteration += 1
 
         # Fit residues with the previously calculated poles
-        residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
-            poles, omega, responses, weights, fit_proportional)
+        residues, constant, proportional = self._fit_residues(
+            poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
 
-        return poles, residues, residues_modified, constant, constant_modified, proportional
+        return poles, residues, constant, proportional
 
     def auto_fit(self,
                  # Initial poles
@@ -797,8 +799,10 @@ class VectorFitting:
             The default was chosen to -60 dB because it may fit most practical applications, putting weight on values
             down to -60 dB but also not sacrificing too much accuracy in the 0 dB range.
 
-        fit_constart: bool, optional
+        fit_constant: bool, optional
             Decide whether the constant term d is fitted or not.
+            If dc_preserving_fit is True, fit_constant is ignored and the DC point will always be set to the
+            exact value of the data at DC.
 
         fit_proportional: bool, optional
             Decide whether the proportional term e is fitted or not.
@@ -923,7 +927,7 @@ class VectorFitting:
             weights=self._get_weights(weighting, weighting_accuracy_db, responses)
 
         # Initialize pole sharing
-        self._init_pole_sharing(pole_sharing, n_responses, pole_groups)
+        self._initialize_pole_sharing(pole_sharing, n_responses, pole_groups)
         n_pole_groups = len(self.poles)
 
         # Convert n_poles_init to list if it is provided as an int
@@ -955,8 +959,9 @@ class VectorFitting:
             # Initialize poles
             if poles_init is None:
                 # Get initial poles
-                poles = self._get_initial_poles(omega, n_poles_init[idx_pole_group], poles_init_type[idx_pole_group],
-                                                poles_init_spacing[idx_pole_group], responses[indices_responses])
+                poles = self._get_initial_poles(
+                    omega, n_poles_init[idx_pole_group], poles_init_type[idx_pole_group],
+                    poles_init_spacing[idx_pole_group], responses[indices_responses])
             else:
                 # Set initial poles to user-provided poles
                 poles = poles_init[idx_pole_group]
@@ -971,16 +976,16 @@ class VectorFitting:
                 n_poles_add_max = saved_n_poles_add_max
 
             # Call _auto_fit
-            poles, residues, residues_modified, constant, constant_modified, proportional = self._auto_fit(
+            poles, residues, constant, proportional = self._auto_fit(
                 poles, omega, responses[indices_responses], weights[indices_responses],
-                fit_constant, fit_proportional, memory_saver,
+                fit_constant, fit_proportional, dc_preserving_fit, memory_saver,
                 n_iterations_pre, n_iterations, n_iterations_post,
                 error_stagnation_threshold, spurious_pole_threshold,
                 abstol, model_order_max, n_poles_add_max)
 
             # Save results
             self._save_results(
-                poles, residues, residues_modified, constant, constant_modified, proportional, idx_pole_group)
+                poles, residues, constant, proportional, idx_pole_group)
 
             logger.info(f'Finished auto_fit for pole group {idx_pole_group+1} of {n_pole_groups}')
 
@@ -991,10 +996,11 @@ class VectorFitting:
         self.print_model_summary(verbose)
 
     def _auto_fit(self,
-                  poles, omega, responses, weights, fit_constant, fit_proportional, memory_saver,
-                  n_iterations_pre, n_iterations, n_iterations_post,
-                  error_stagnation_threshold, spurious_pole_threshold, abstol, model_order_max, n_poles_add_max
-                  ):
+        poles, omega, responses, weights,
+        fit_constant, fit_proportional, dc_preserving_fit, memory_saver,
+        n_iterations_pre, n_iterations, n_iterations_post,
+        error_stagnation_threshold, spurious_pole_threshold, abstol, model_order_max, n_poles_add_max):
+
         # This implements the core algorithm of vector fitting with adding and skimming.
         # _auto_fit is called by auto_fit. For a description of the arguments see auto_fit.
 
@@ -1004,12 +1010,13 @@ class VectorFitting:
         # Initial pole relocation
         logger.info('Initial pole relocation')
         for _ in range(n_iterations_pre):
-            poles, d_tilde = self._relocate_poles(poles, omega, responses, weights,
-                                                  fit_proportional, memory_saver)
+            poles, d_tilde = self._relocate_poles(
+                poles, omega, responses, weights,
+                fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
 
         # Fit residues
-        residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
-            poles, omega, responses, weights, fit_proportional)
+        residues, constant, proportional = self._fit_residues(
+            poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
 
         # Calculate delta
         delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -1054,12 +1061,13 @@ class VectorFitting:
             # Intermediate pole relocation
             logger.info('Intermediate pole relocation')
             for _ in range(n_iterations):
-                poles, d_tilde, = self._relocate_poles(poles, omega, responses, weights,
-                                                       fit_proportional, memory_saver)
+                poles, d_tilde, = self._relocate_poles(
+                    poles, omega, responses, weights,
+                    fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
 
             # Fit residues
-            residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
-                poles, omega, responses, weights, fit_proportional)
+            residues, constant, proportional = self._fit_residues(
+                poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
 
             # Calculate delta
             delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -1103,16 +1111,18 @@ class VectorFitting:
 
         # Final pole relocation
         for _ in range(n_iterations_post):
-            poles, d_tilde = self._relocate_poles(poles, omega, responses, weights,
-                                                  fit_proportional, memory_saver)
+            poles, d_tilde = self._relocate_poles(
+                poles, omega, responses, weights,
+                fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
 
         # Final residue fitting
-        residues, residues_modified, constant, constant_modified, proportional = self._fit_residues(
-            poles, omega, responses, weights, fit_proportional)
+        residues, constant, proportional = self._fit_residues(
+            poles, omega, responses, weights,
+            fit_constant, fit_proportional, dc_preserving_fit)
 
-        return poles, residues, residues_modified, constant, constant_modified, proportional
+        return poles, residues, constant, proportional
 
-    def _init_pole_sharing(self, pole_sharing, n_responses, pole_groups):
+    def _initialize_pole_sharing(self, pole_sharing, n_responses, pole_groups):
         # Initializes all data structures needed for pole sharing
 
         # Create pole group indices and pole group member indices. Both have n_responses elements
@@ -1775,7 +1785,10 @@ class VectorFitting:
 
         return rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im
 
-    def _relocate_poles(self, poles, omega, responses, weights, fit_proportional, memory_saver):
+    def _relocate_poles(self,
+        poles, omega, responses, weights,
+        fit_constant, fit_proportional, dc_preserving_fit, memory_saver):
+
         n_responses, n_freqs = np.shape(responses)
         s = 1j * omega
 
@@ -1869,7 +1882,7 @@ class VectorFitting:
         # [J                   ]        [weight_extra*n_freqs]
 
         ##############
-        # Further notes on the residual basis functions used in X and Y:
+        # Further notes on the residual basis functions used in X and X~:
         # In general, for complex conjugate pole pairs, also the residues
         # are complex conjugate.
         #
@@ -1945,7 +1958,7 @@ class VectorFitting:
         # to build the final real matrix for the eigenvalue calculation.
 
         # Get total number of poles, counting complex conjugate pairs as 2 poles
-        n_poles=np.sum((poles.imag != 0) + 1)
+        n_poles = np.sum((poles.imag != 0) + 1)
 
         # Initialize number of elements in C
         n_C = n_poles
@@ -2923,6 +2936,7 @@ class VectorFitting:
         idx_poles_complex = np.nonzero(poles.imag != 0)[0]
 
         return idx_poles_real, idx_poles_complex
+
     def _get_residues_and_constant_modified(self, poles, residues, constant):
         # Returns the residues_modified and constant_modified matching to the modified
         # vector fitting using basis functions r*s/(s-p)
