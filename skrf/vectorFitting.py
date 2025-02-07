@@ -380,6 +380,9 @@ class VectorFitting:
 
                  # Enforce dc data passivity
                  enforce_data_passivity_at_dc = True,
+
+                 # Enable dc preserving fit
+                 dc_preserving_fit = True,
                  ) -> None:
         """
         Main work routine performing the vector fit. The results will be stored in the class variables
@@ -496,6 +499,14 @@ class VectorFitting:
 
             A warning will be printed if the DC point is non-passive in any case, so you have the chance to provide
             better data at DC that is passive, avoiding subsequent errors due to the passivity enforcement.
+
+        dc_preserving_fit: bool, optional
+            Enables a DC preserving with with modified rational basis functions. The DC point of the fit will be
+            exactly the DC point of the data and the fit will not modify it.
+
+            It is important to set enforce_data_passivity_at_dc to True because the passivity_enforce() algorithm
+            will also not be able to modify the DC point if you fitted with dc_preserving_fit = True. Thus, if the
+            DC point in the data is not passive, it will be impossible to make the entire model passive.
 
         Returns
         -------
@@ -691,6 +702,9 @@ class VectorFitting:
 
                  # Enforce dc data passivity
                  enforce_data_passivity_at_dc = True,
+
+                 # Enable dc preserving fit
+                 dc_preserving_fit = True,
                  ) -> (np.ndarray, np.ndarray):
         """
         Automatic fitting routine implementing the "vector fitting with adding and skimming" algorithm as proposed in
@@ -866,6 +880,14 @@ class VectorFitting:
 
             A warning will be printed if the DC point is non-passive in any case, so you have the chance to provide
             better data at DC that is passive, avoiding subsequent errors due to the passivity enforcement.
+
+        dc_preserving_fit: bool, optional
+            Enables a DC preserving with with modified rational basis functions. The DC point of the fit will be
+            exactly the DC point of the data and the fit will not modify it.
+
+            It is important to set enforce_data_passivity_at_dc to True because the passivity_enforce() algorithm
+            will also not be able to modify the DC point if you fitted with dc_preserving_fit = True. Thus, if the
+            DC point in the data is not passive, it will be impossible to make the entire model passive.
 
         Returns
         -------
