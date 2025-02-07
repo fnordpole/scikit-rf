@@ -1745,11 +1745,8 @@ class VectorFitting:
         # If modified is True: Returns the basis functions for modified vector fitting (s*r/(s-p))
         # If modified is False: Returns the basis functions for original vector fitting (r/(s-p))
 
-        # Get indices of real poles
-        idx_poles_real = np.nonzero(poles.imag == 0)[0]
-
-        # Get indices of complex poles
-        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+        # Get indices of poles
+        idx_poles_real, idx_poles_complex = self._get_indices_poles(poles)
 
         # Create rbf indices
         n_poles_real = len(idx_poles_real)
@@ -2118,11 +2115,8 @@ class VectorFitting:
         # Build H=A-BD^-1C^T
         H = np.zeros((len(C_tilde_equiv), len(C_tilde_equiv)))
 
-        # Get indices of real poles
-        idx_poles_real = np.nonzero(poles.imag == 0)[0]
-
-        # Get indices of complex poles
-        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+        # Get indices of poles
+        idx_poles_real, idx_poles_complex = self._get_indices_poles(poles)
 
         # Get real and complex poles
         poles_real = poles[idx_poles_real]
@@ -2176,11 +2170,8 @@ class VectorFitting:
         # Get total number of poles, counting complex conjugate pairs as 2 poles
         n_poles=np.sum((poles.imag != 0) + 1)
 
-        # Get indices of real poles
-        idx_poles_real = np.nonzero(poles.imag == 0)[0]
-
-        # Get indices of complex poles
-        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+        # Get indices of poles
+        idx_poles_real, idx_poles_complex = self._get_indices_poles(poles)
 
         # Initialize number of elements in C
         n_C = n_poles
@@ -2921,6 +2912,38 @@ class VectorFitting:
             return F, C, D, E, F_view, C_view
         else:
             return F, C, D, E
+
+    def _get_indices_poles(self, poles):
+        # Returns indices of real and complex conjugate pole pairs in poles
+
+        # Get indices of real poles
+        idx_poles_real = np.nonzero(poles.imag == 0)[0]
+
+        # Get indices of complex poles
+        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+
+        return idx_poles_real, idx_poles_complex
+    def _get_residues_and_constant_modified(self, poles, residues, constant):
+        # Returns the residues_modified and constant_modified matching to the modified
+        # vector fitting using basis functions r*s/(s-p)
+
+        # Get indices of poles
+        idx_poles_real, idx_poles_complex = self._get_indices_poles(poles)
+
+        # Initialize empty
+        residues_modified = np.empty(np.shape(residues), dtype=complex)
+        constant_modified = np.empty(np.shape(constant), dtype=complex)
+
+        # Residues in modified vf form
+        residues_modified[:, idx_poles_real] = residues[:, idx_poles_real] / np.real(poles[idx_poles_real])
+        residues_modified[:, idx_poles_complex] =  residues[:, idx_poles_complex] / poles[idx_poles_complex]
+
+        # Constant in standard partial fraction form
+        constant_modified = constant - \
+            np.sum(np.real(residues_modified[:, idx_poles_real]), axis = 1) - \
+            2 * np.sum(np.real(residues_modified[:, idx_poles_complex]), axis = 1)
+
+        return residues_modified, constant_modified
 
     def _get_state_space_FABCDE(self, s, create_views = False, create_modified = False):
         # Creates the state space matrix F=(sI-A)^-1 B and C, D, E
