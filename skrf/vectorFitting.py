@@ -1718,6 +1718,44 @@ class VectorFitting:
         # Convert back to np array and return
         return np.array(poles)
 
+    def _get_rational_basis_functions(self, s, poles, modified = False):
+        # Returns the rational basis functions and indices
+        # If modified is True: Returns the basis functions for modified vector fitting (s*r/(s-p))
+        # If modified is False: Returns the basis functions for original vector fitting (r/(s-p))
+
+        # Get indices of real poles
+        idx_poles_real = np.nonzero(poles.imag == 0)[0]
+
+        # Get indices of complex poles
+        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+
+        # Create rbf indices
+        n_poles_real = len(idx_poles_real)
+        n_poles_complex = len(idx_poles_complex)
+        idx_rbf_re = np.arange(n_poles_real)
+        idx_rbf_complex_re = n_poles_real + 2 * np.arange(n_poles_complex)
+        idx_rbf_complex_im = idx_rbf_complex_re + 1
+
+        if modified:
+            # Build components of rational basis functions (RBF)
+            rbf_real = s[:, None] / (s[:, None] - poles[None, idx_poles_real])
+
+            rbf_complex_re = (s[:, None] / (s[:, None] - poles[None, idx_poles_complex]) +
+                                s[:, None] / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+            rbf_complex_im = ((1j * s[:, None]) / (s[:, None] - poles[None, idx_poles_complex]) -
+                                (1j * s[:, None]) / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+        else:
+            # Build components of rational basis functions (RBF)
+            rbf_real = 1 / (s[:, None] - poles[None, idx_poles_real])
+
+            rbf_complex_re = (1 / (s[:, None] - poles[None, idx_poles_complex]) +
+                                1 / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+            rbf_complex_im = (1j / (s[:, None] - poles[None, idx_poles_complex]) -
+                                1j / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
+
+
+        return rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im
+
     def _relocate_poles(self, poles, omega, responses, weights, fit_proportional, memory_saver):
         n_responses, n_freqs = np.shape(responses)
         s = 1j * omega
@@ -1890,12 +1928,6 @@ class VectorFitting:
         # Get total number of poles, counting complex conjugate pairs as 2 poles
         n_poles=np.sum((poles.imag != 0) + 1)
 
-        # Get indices of real poles
-        idx_poles_real = np.nonzero(poles.imag == 0)[0]
-
-        # Get indices of complex poles
-        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
-
         # Initialize number of elements in C
         n_C = n_poles
 
@@ -1907,19 +1939,9 @@ class VectorFitting:
         # Number of elements in C~ = C_tilde
         n_C_tilde = n_poles
 
-        # Build components of rational basis functions (RBF)
-        rbf_real = s[:, None] / (s[:, None] - poles[None, idx_poles_real])
-
-        rbf_complex_re = (s[:, None] / (s[:, None] - poles[None, idx_poles_complex]) +
-                            s[:, None] / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
-        rbf_complex_im = ((1j * s[:, None]) / (s[:, None] - poles[None, idx_poles_complex]) -
-                            (1j * s[:, None]) / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
-
-        n_real = len(idx_poles_real)
-        n_cmplx = len(idx_poles_complex)
-        idx_real = np.arange(n_real)
-        idx_complex_re = n_real + 2 * np.arange(n_cmplx)
-        idx_complex_im = idx_complex_re + 1
+        # Get rational basis functions (RBF)
+        rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im = \
+            self._get_rational_basis_functions(s, poles, modified = True)
 
         # Calculate n_rows of R22
         K = min(n_freqs * 2, n_C + n_C_tilde)
@@ -1945,18 +1967,18 @@ class VectorFitting:
             A = np.empty((n_responses, n_freqs, n_C + n_C_tilde), dtype=complex)
 
             # Components W X
-            A[:, :, idx_real] = weights[:, :, None] * rbf_real[None, :, :]
-            A[:, :, idx_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
-            A[:, :, idx_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
+            A[:, :, idx_rbf_re] = weights[:, :, None] * rbf_real[None, :, :]
+            A[:, :, idx_rbf_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
+            A[:, :, idx_rbf_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
 
             if fit_proportional:
                 A[:, :, idx_prop] = weights[:, :, None] * s[None, :, None]
 
             # Components W X~
-            A[:, :, n_C + idx_real] = -1 * weights[:, :, None] * rbf_real[None, :, :] * responses[:, :, None]
-            A[:, :, n_C + idx_complex_re] = \
+            A[:, :, n_C + idx_rbf_re] = -1 * weights[:, :, None] * rbf_real[None, :, :] * responses[:, :, None]
+            A[:, :, n_C + idx_rbf_complex_re] = \
                 -1 * weights[:, :, None] * rbf_complex_re[None, :, :] * responses[:, :, None]
-            A[:, :, n_C + idx_complex_im] = \
+            A[:, :, n_C + idx_rbf_complex_im] = \
                 -1 * weights[:, :, None] * rbf_complex_im[None, :, :] * responses[:, :, None]
 
             # The numpy QR decomposition in mode 'r' will be A = Q R
@@ -2009,17 +2031,17 @@ class VectorFitting:
                 A = np.empty((n_freqs, n_C + n_C_tilde), dtype=complex)
 
                 # Components W X
-                A[:, idx_real] = weights[i, :, None] * rbf_real[None, :, :]
-                A[:, idx_complex_re] = weights[i, :, None] * rbf_complex_re[None, :, :]
-                A[:, idx_complex_im] = weights[i, :, None] * rbf_complex_im[None, :, :]
+                A[:, idx_rbf_re] = weights[i, :, None] * rbf_real[None, :, :]
+                A[:, idx_rbf_complex_re] = weights[i, :, None] * rbf_complex_re[None, :, :]
+                A[:, idx_rbf_complex_im] = weights[i, :, None] * rbf_complex_im[None, :, :]
                 if fit_proportional:
                     A[:, idx_prop] = weights[i, :, None] * s[None, :, None]
 
                 # Components W X~
-                A[:, n_C + idx_real] = -1 * weights[i, :, None] * rbf_real[None, :, :] * responses[i, :, None]
-                A[:, n_C + idx_complex_re] = \
+                A[:, n_C + idx_rbf_re] = -1 * weights[i, :, None] * rbf_real[None, :, :] * responses[i, :, None]
+                A[:, n_C + idx_rbf_complex_re] = \
                     -1 * weights[i, :, None] * rbf_complex_re[None, :, :] * responses[i, :, None]
-                A[:, n_C + idx_complex_im] = \
+                A[:, n_C + idx_rbf_complex_im] = \
                     -1 * weights[i, :, None] * rbf_complex_im[None, :, :] * responses[i, :, None]
 
                 # QR decomposition. Note: Here we have to use vstack instead of hstack
@@ -2074,16 +2096,24 @@ class VectorFitting:
         # Build H=A-BD^-1C^T
         H = np.zeros((len(C_tilde_equiv), len(C_tilde_equiv)))
 
+        # Get indices of real poles
+        idx_poles_real = np.nonzero(poles.imag == 0)[0]
+
+        # Get indices of complex poles
+        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+
+        # Get real and complex poles
         poles_real = poles[idx_poles_real]
         poles_complex = poles[idx_poles_complex]
 
-        H[idx_real, idx_real] = poles_real.real
-        H[idx_real] -= C_tilde_equiv / d_tilde_equiv
-        H[idx_complex_re, idx_complex_re] = poles_complex.real
-        H[idx_complex_re, idx_complex_im] = poles_complex.imag
-        H[idx_complex_im, idx_complex_re] = -1 * poles_complex.imag
-        H[idx_complex_im, idx_complex_im] = poles_complex.real
-        H[idx_complex_re] -= 2 * C_tilde_equiv / d_tilde_equiv
+        # Build H
+        H[idx_rbf_re, idx_rbf_re] = poles_real.real
+        H[idx_rbf_re] -= C_tilde_equiv / d_tilde_equiv
+        H[idx_rbf_complex_re, idx_rbf_complex_re] = poles_complex.real
+        H[idx_rbf_complex_re, idx_rbf_complex_im] = poles_complex.imag
+        H[idx_rbf_complex_im, idx_rbf_complex_re] = -1 * poles_complex.imag
+        H[idx_rbf_complex_im, idx_rbf_complex_im] = poles_complex.real
+        H[idx_rbf_complex_re] -= 2 * C_tilde_equiv / d_tilde_equiv
 
         # Compute eigenvalues of H. These are the new poles.
         poles_new = np.linalg.eigvals(H)
@@ -2138,34 +2168,24 @@ class VectorFitting:
             idx_prop = [n_C]
             n_C += 1
 
-        # Build  components of RBF
-        rbf_real = s[:, None] / (s[:, None] - poles[None, idx_poles_real])
-
-        rbf_complex_re = (s[:, None] / (s[:, None] - poles[None, idx_poles_complex]) +
-                            s[:, None] / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
-        rbf_complex_im = ((1j * s[:, None]) / (s[:, None] - poles[None, idx_poles_complex]) -
-                            (1j * s[:, None]) / (s[:, None] - np.conj(poles[None, idx_poles_complex])))
-
-        n_real = len(idx_poles_real)
-        n_cmplx = len(idx_poles_complex)
-        idx_real = np.arange(n_real)
-        idx_complex_re = n_real + 2 * np.arange(n_cmplx)
-        idx_complex_im = idx_complex_re + 1
+        # Get rational basis functions (RBF)
+        rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im = \
+            self._get_rational_basis_functions(s, poles, modified = True)
 
         # Build matrix A
         A = np.empty((n_responses, n_freqs, n_C), dtype=complex)
 
         # Components W X
-        A[:, :, idx_real] = weights[:, :, None] * rbf_real[None, :, :]
-        A[:, :, idx_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
-        A[:, :, idx_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
+        A[:, :, idx_rbf_re] = weights[:, :, None] * rbf_real[None, :, :]
+        A[:, :, idx_rbf_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
+        A[:, :, idx_rbf_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
 
         if fit_proportional:
-            d_norm=np.empty(n_responses)
-            d_norm[:]=np.asarray(
-                [np.linalg.norm(A[i, :, :idx_prop[0]-1])/(n_freqs*(idx_prop[0])) for i in range(n_responses)])
+            d_norm = np.empty(n_responses)
+            d_norm[:] = np.asarray(
+                [np.linalg.norm(A[i, :, :idx_prop[0] - 1]) / (n_freqs*(idx_prop[0])) for i in range(n_responses)])
 
-            e_norm=d_norm/(np.linalg.norm(s)/n_freqs)
+            e_norm = d_norm / (np.linalg.norm(s) / n_freqs)
             A[:, :, idx_prop] = e_norm[:, None, None] * weights[:, :, None] * s[None, :, None]
 
         # Build responses_weigthed
@@ -2190,17 +2210,18 @@ class VectorFitting:
         residues_modified = np.empty((len(responses), len(poles)), dtype=complex)
 
         # Residues in stardard partial fraction form
-        residues[:, idx_poles_real] = x[:, idx_real] * np.real(poles[idx_poles_real])
-        residues[:, idx_poles_complex] = (x[:, idx_complex_re] + 1j * x[:, idx_complex_im]) * poles[idx_poles_complex]
+        residues[:, idx_poles_real] = x[:, idx_rbf_re] * np.real(poles[idx_poles_real])
+        residues[:, idx_poles_complex] = \
+            (x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]) * poles[idx_poles_complex]
 
         # Residues in modified vf form
-        residues_modified[:, idx_poles_real] = x[:, idx_real]
-        residues_modified[:, idx_poles_complex] = x[:, idx_complex_re] + 1j * x[:, idx_complex_im]
+        residues_modified[:, idx_poles_real] = x[:, idx_rbf_re]
+        residues_modified[:, idx_poles_complex] = x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]
 
         # Constant in standard partial fraction form
         constant = np.real(responses[:, 0]) + \
-            np.sum(np.real(x[:, idx_real]), axis = 1) + \
-            2 * np.sum(np.real(x[:, idx_complex_re]), axis = 1)
+            np.sum(np.real(x[:, idx_rbf_re]), axis = 1) + \
+            2 * np.sum(np.real(x[:, idx_rbf_complex_re]), axis = 1)
 
         # Constant in modified vf form
         constant_modified = np.real(responses[:, 0])
