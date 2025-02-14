@@ -353,7 +353,7 @@ class VectorFitting:
 
         # Print algorithm info message
         if dc_preserving_fit:
-            print("Using DC preserving fit. fit_proportional={fit_proportional}")
+            print(f'Using DC preserving fit. fit_proportional={fit_proportional}')
         else:
             print(f'Not using DC preserving fit. fit_constant={fit_constant} fit_proportional={fit_proportional}')
 
@@ -1848,7 +1848,7 @@ class VectorFitting:
 
         # Get rational basis functions (RBF)
         rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im = \
-            self._get_rational_basis_functions(s, poles, modified = dc_preserving_fit)
+            self._get_rational_basis_functions(s, poles, dc_preserving_fit)
 
         if not memory_saver:
             # We build all rows of A at once and run the QR factorization using
