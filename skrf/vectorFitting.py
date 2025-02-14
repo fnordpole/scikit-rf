@@ -2019,13 +2019,13 @@ class VectorFitting:
         d_tilde = 1
         for i, pole in enumerate(poles):
             if np.imag(pole) == 0:
-                C_tilde[i] = C_tilde[i] * np.real(pole)
                 d_tilde += C_tilde[i]
+                C_tilde[i] = C_tilde[i] * np.real(pole)
             else:
+                d_tilde += 2 * C_tilde[i]
                 C = C_tilde[i] + 1j * C_tilde[i + 1]
                 C_tilde[i] = np.real(C * pole)
                 C_tilde[i + 1] = np.imag(C * pole)
-                d_tilde += 2 * C_tilde[i]
 
         return C_tilde, d_tilde
 
