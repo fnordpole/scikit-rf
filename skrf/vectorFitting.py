@@ -1992,7 +1992,7 @@ class VectorFitting:
             # The extra equation is weighted such that its influence in the least
             # squares is equal to all other equations. In the original Gustavsen
             # VF-Relaxed paper, norm(H)/(n_responses*n_freqs) is used.
-            weight_extra = np.linalg.norm(responses*weights) / np.size(responses)
+            weight_extra = np.linalg.norm(responses * weights) / np.size(responses)
 
             # Extra equation for d~
             A_dense[-1, idx_rbf_re] = weight_extra * np.sum(rbf_real.real, axis=0)
@@ -2355,20 +2355,29 @@ class VectorFitting:
 
         # Residues holds the residues in standard partial fraction form
         residues = np.empty((len(responses), len(poles)), dtype=complex)
-        residues[:, idx_poles_real] = x[:, idx_rbf_re] * np.real(poles[idx_poles_real])
-        residues[:, idx_poles_complex] = \
-            (x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]) * poles[idx_poles_complex]
+
+        if dc_preserving_fit:
+            residues[:, idx_poles_real] = x[:, idx_rbf_re] * np.real(poles[idx_poles_real])
+            residues[:, idx_poles_complex] = \
+                (x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]) * poles[idx_poles_complex]
+        else:
+            residues[:, idx_poles_real] = x[:, idx_rbf_re]
+            residues[:, idx_poles_complex] = x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]
 
         # Constant
-        if not dc_preserving_fit and fit_constant:
-            constant = np.matrix.flatten(x[:, idx_const]) * d_norm
-        elif not dc_preserving_fit:
-            constant = np.zeros(n_responses)
-        elif dc_preserving_fit:
+        if dc_preserving_fit:
             # Constant in standard partial fraction form
             constant = np.real(responses[:, 0]) + \
                 np.sum(np.real(x[:, idx_rbf_re]), axis = 1) + \
                 2 * np.sum(np.real(x[:, idx_rbf_complex_re]), axis = 1)
+
+        elif not dc_preserving_fit and fit_constant:
+            # Not dc_preserving_fit and fit_constant
+            constant = np.matrix.flatten(x[:, idx_const]) * d_norm
+
+        else:
+            # Otherwise constant is zero
+            constant = np.zeros(n_responses)
 
         # Proportional
         if fit_proportional:
