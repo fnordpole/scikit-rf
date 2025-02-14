@@ -2921,130 +2921,6 @@ class VectorFitting:
         else:
             return A, B, C, D, E
 
-    def _get_state_space_FCDE(self, s, create_views = False,
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        # Creates the state space matrix F=(sI-A)^-1 B and C, D, E
-
-        # Input argument s is an array of complex frequencies s = 1j * omega for which F is built.
-
-        # In the calculation of F no direct inversion is used and the diagonality properties are
-        # used to efficiently invert it. Also the matrix multiplication with B is efficiently calculated
-        # as an element wise multiplication instead. This is possible because also the inverted matrix is diagonal.
-
-        # Get total number of ports including all pole groups
-        n_ports = self._get_n_ports()
-
-        # Get number of frequencies
-        n_freqs = np.size(s, axis = 0)
-
-        # Get n_responses
-        n_responses = n_ports * n_ports
-
-        # These views enable easy accesss to the submatrices
-        C_view = [x[:] for x in [[None] * n_ports] * n_ports]
-        F_view = [x[:] for x in [[None] * n_ports] * n_ports]
-
-        # Get model orders for every pole group
-        model_orders=np.array([self.get_model_order(x) for x in range(len(self.poles))])
-
-        # For every big column of C we need to find the number of subcolumns
-        n_subcolumns_in_columns_of_C = np.empty((n_ports))
-        # Working column wise: j'th column:
-        for j in range(n_ports):
-            # Get indices of the responses of the first column S11, S21, S31, ...
-            indices_responses = j + np.arange(0, n_responses, n_ports)
-            # Get pole group of every response
-            indices_pole_groups = self.map_idx_response_to_idx_pole_group[indices_responses]
-            # Get sorted unique pole groups
-            sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
-            # Get total model order for column
-            model_order_column = int(np.sum(model_orders[sorted_unique_indices_pole_groups]))
-            # Save
-            n_subcolumns_in_columns_of_C[j] = model_order_column
-
-        # Create empty output matrices
-        n_A = int(np.sum(n_subcolumns_in_columns_of_C))
-        F = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
-        C = np.zeros(shape=(n_ports, n_A))
-        D = np.zeros(shape=(n_ports, n_ports))
-        E = np.zeros(shape=(n_ports, n_ports))
-
-        # Index on diagonal of A
-        idx_diag_A = 0
-        # Column offset of the columns of C
-        offset_col_C = 0
-        # Working column wise for every big column j of C:
-        for j in range(n_ports):
-            # Get indices of the responses of the first column S11, S21, S31, ...
-            indices_responses = j + np.arange(0, n_responses, n_ports)
-            # Get pole group of every response
-            indices_pole_groups = self.map_idx_response_to_idx_pole_group[indices_responses]
-            # Get sorted unique pole groups
-            sorted_unique_indices_pole_groups = np.unique(indices_pole_groups)
-            # Get number of poles for every unique pole group
-            model_orders_per_group = [self.get_model_order(x) for x in sorted_unique_indices_pole_groups]
-            # Get total model order for column
-            model_order_column = np.sum(model_orders_per_group)
-            # Create dict mapping sorted_unique_indices_pole_groups to i (row index)
-            map_sorted_unique_indices_pole_groups_to_i = \
-                {x: np.nonzero(indices_pole_groups == x)[0] for x in sorted_unique_indices_pole_groups}
-
-            # Work pole-group-wise
-            for idx_pole_group in sorted_unique_indices_pole_groups:
-                poles = self.poles[idx_pole_group]
-                residues = self.residues[idx_pole_group]
-                constant = self.constant[idx_pole_group]
-                proportional = self.proportional[idx_pole_group]
-
-                # Create contribution of this pole group into A and B
-                for pole in poles:
-                    if np.imag(pole) == 0.0:
-                        # Real pole
-                        F[:, idx_diag_A, j] = 1 / (s - np.real(pole))
-                        idx_diag_A += 1
-                    else:
-                        # Complex-conjugate pole
-                        denom = (s - np.real(pole))**2 + np.imag(pole)**2
-                        F[:, idx_diag_A, j] = 2 * (s - np.real(pole)) / denom
-                        F[:, idx_diag_A + 1, j] = -2 * np.imag(pole) / denom
-                        idx_diag_A += 2
-
-                # Process all responses that are part of this pole group
-                for i in map_sorted_unique_indices_pole_groups_to_i[idx_pole_group]:
-                    # Get idx_response
-                    idx_response = i * n_ports + j
-                    idx_pole_group_member=self.map_idx_response_to_idx_pole_group_member[idx_response]
-
-                    # Initialize idx_col_C to offset_col_C
-                    idx_col_C = offset_col_C
-                    for residue in residues[idx_pole_group_member]:
-                        if np.imag(residue) == 0.0:
-                            C[i, idx_col_C] = np.real(residue)
-                            idx_col_C += 1
-                        else:
-                            C[i, idx_col_C] = np.real(residue)
-                            C[i, idx_col_C + 1] = np.imag(residue)
-                            idx_col_C += 2
-
-                    if create_views:
-                        # Create view on C
-                        C_view[i][j] = C[i, offset_col_C:idx_col_C]
-
-                        # Create view on F
-                        F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
-
-                    # Create D and E
-                    D[i, j] = constant[idx_pole_group_member]
-                    E[i, j] = proportional[idx_pole_group_member]
-
-                # Increment offset for next pole group
-                offset_col_C = idx_col_C
-
-        if create_views:
-            return F, C, D, E, F_view, C_view
-        else:
-            return F, C, D, E
-
     def _get_indices_poles(self, poles):
         # Returns indices of real and complex conjugate pole pairs in poles
 
@@ -3185,10 +3061,11 @@ class VectorFitting:
             for idx_pole_group in sorted_unique_indices_pole_groups:
                 poles = self.poles[idx_pole_group]
                 residues = self.residues[idx_pole_group]
-                residues_modified = self.residues_modified[idx_pole_group]
                 constant = self.constant[idx_pole_group]
-                constant_modified = self.constant_modified[idx_pole_group]
                 proportional = self.proportional[idx_pole_group]
+                if create_modified:
+                    residues_modified, constant_modified = \
+                        self._get_residues_and_constant_modified(poles, residues, constant)
 
                 # Create contribution of this pole group into A and B
                 for pole in poles:
@@ -3282,310 +3159,6 @@ class VectorFitting:
 
         else:
             return F, A, B, C, D, E
-
-    def _get_state_space_CDE(self, idx_pole_group, idx_response = None,
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Private method.
-        Returns the real-valued system matrices of the state-space representation of the current rational model, as
-        defined in [#]_.
-
-        Returns
-        -------
-        C : ndarray
-            State-space matrix C holding the residues
-        D : ndarray
-            State-space matrix D holding the constants
-        E : ndarray
-            State-space matrix E holding the proportional coefficients
-
-        Raises
-        ------
-        ValueError
-            If the model parameters have not been initialized (by running :func:`vector_fit()` or :func:`read_npz()`).
-
-        References
-        ----------
-        .. [#] B. Gustavsen and A. Semlyen, "Fast Passivity Assessment for S-Parameter Rational Models Via a Half-Size
-            Test Matrix," in IEEE Transactions on Microwave Theory and Techniques, vol. 56, no. 12, pp. 2701-2708,
-            Dec. 2008, DOI: 10.1109/TMTT.2008.2007319.
-        """
-
-        # Initial checks
-        if self.poles is None:
-            raise ValueError('poles = None; nothing to do. You need to run vector_fit() first.')
-        if self.residues is None:
-            raise ValueError('self.residues = None; nothing to do. You need to run vector_fit() first.')
-        if self.proportional is None:
-            raise ValueError('self.proportional = None; nothing to do. You need to run vector_fit() first.')
-        if self.constant is None:
-            raise ValueError('self.constant = None; nothing to do. You need to run vector_fit() first.')
-
-        # Assemble real-valued state-space matrices C, D, E from fitted complex-valued pole-residue model
-
-        # Get data
-        poles=self.poles[idx_pole_group]
-        residues=self.residues[idx_pole_group]
-        constant=self.constant[idx_pole_group]
-        proportional=self.proportional[idx_pole_group]
-
-        n_poles_real = np.sum(poles.imag == 0)
-        n_poles_complex = np.sum(poles.imag != 0)
-
-        if idx_response is None:
-            # Build C, D and E for all responses in of the pole group
-
-            # Determine size of the matrix system. Note: This is the n_ports inside of
-            # the pole group and not the n_ports of the entire network!
-            n_ports = int(np.sqrt(np.shape(residues)[0]))
-            n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
-
-            # State-space matrix C holds the residues
-            # Assemble C = [[R1.11, R1.12, R1.13, ...], [R2.11, R2.12, R2.13, ...], ...]
-            C = np.zeros(shape=(n_ports, n_matrix))
-            for i in range(n_ports):
-                for j in range(n_ports):
-                    # i: row index
-                    # j: column index
-                    i_response = i * n_ports + j
-                    j_residues = 0
-                    for residue in residues[i_response]:
-                        if np.imag(residue) == 0.0:
-                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
-                            j_residues += 1
-                        else:
-                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues] = np.real(residue)
-                            C[i, j * (n_poles_real + 2 * n_poles_complex) + j_residues + 1] = np.imag(residue)
-                            j_residues += 2
-
-            # State-space matrix D holds the constants
-            # Assemble D = [[d11, d12, ...], [d21, d22, ...], ...]
-            D = np.zeros(shape=(n_ports, n_ports))
-            for i in range(n_ports):
-                for j in range(n_ports):
-                    # i: row index
-                    # j: column index
-                    i_response = i * n_ports + j
-                    D[i, j] = constant[i_response]
-
-            # Etate-space matrix E holds the proportional coefficients (usually 0 in case of fitted S-parameters)
-            # Assemble E = [[e11, e12, ...], [e21, e22, ...], ...]
-            E = np.zeros(shape=(n_ports, n_ports))
-            for i in range(n_ports):
-                for j in range(n_ports):
-                    # i: row index
-                    # j: column index
-                    i_response = i * n_ports + j
-                    E[i, j] = proportional[i_response]
-        else:
-            # Build C, D and E for only the specified response
-            n_matrix = n_poles_real + 2 * n_poles_complex
-
-            # State-space matrix C holds the residues
-            # Assemble C = [[R1.11, R1.12, R1.13, ...]]
-            C = np.zeros(shape=(1, n_matrix))
-
-            j_residues = 0
-            for residue in residues[idx_response]:
-                if np.imag(residue) == 0.0:
-                    C[0, j_residues] = np.real(residue)
-                    j_residues += 1
-                else:
-                    C[0, j_residues] = np.real(residue)
-                    C[0, j_residues + 1] = np.imag(residue)
-                    j_residues += 2
-
-            # State-space matrix D holds the constant
-            D = np.zeros(shape=(1, 1))
-            D[0, 0] = constant[idx_response]
-
-            # State-space matrix E holds the proportional
-            E = np.zeros(shape=(1, 1))
-            E[0, 0] = proportional[idx_response]
-
-        return C, D, E
-
-    def _get_state_space_AB(self, idx_pole_group, idx_response = None,
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Private method.
-        Returns the real-valued system matrices of the state-space representation of the current rational model, as
-        defined in [#]_.
-
-        Returns
-        -------
-        A : ndarray
-            State-space matrix A holding the poles on the diagonal as real values with imaginary parts on the sub-
-            diagonal
-        B : ndarray
-            State-space matrix B holding coefficients (1, 2, or 0), depending on the respective type of pole in A
-
-        Raises
-        ------
-        ValueError
-            If the model parameters have not been initialized (by running :func:`vector_fit()` or :func:`read_npz()`).
-
-        References
-        ----------
-        .. [#] B. Gustavsen and A. Semlyen, "Fast Passivity Assessment for S-Parameter Rational Models Via a Half-Size
-            Test Matrix," in IEEE Transactions on Microwave Theory and Techniques, vol. 56, no. 12, pp. 2701-2708,
-            Dec. 2008, DOI: 10.1109/TMTT.2008.2007319.
-        """
-
-        # Initial checks
-        if self.poles is None:
-            raise ValueError('poles = None; nothing to do. You need to run vector_fit() first.')
-        if self.residues is None:
-            raise ValueError('self.residues = None; nothing to do. You need to run vector_fit() first.')
-        if self.proportional is None:
-            raise ValueError('self.proportional = None; nothing to do. You need to run vector_fit() first.')
-        if self.constant is None:
-            raise ValueError('self.constant = None; nothing to do. You need to run vector_fit() first.')
-
-        # Assemble real-valued state-space matrices A, B from fitted complex-valued pole-residue model
-
-        # Get data
-        poles=self.poles[idx_pole_group]
-        residues=self.residues[idx_pole_group]
-
-        n_poles_real = np.sum(poles.imag == 0)
-        n_poles_complex = np.sum(poles.imag != 0)
-
-        if idx_response is None:
-            # Build A and B for all responses in of the pole group
-
-            # Determine size of the matrix system. Note: This is the n_ports inside of
-            # the pole group and not the n_ports of the entire network!
-            n_ports = int(np.sqrt(np.shape(residues)[0]))
-            n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
-
-            # State-space matrix A holds the poles on the diagonal as real values with imaginary parts on the sub-diagonal
-            # State-space matrix B holds coefficients (1, 2, or 0), depending on the respective type of pole in A
-            # Assemble A = [[poles_real,   0,                  0],
-            #               [0,            real(poles_complex),   imag(poles_complex],
-            #               [0,            -imag(poles_complex),  real(poles_complex]]
-            A = np.identity(n_matrix)
-            B = np.zeros(shape=(n_matrix, n_ports))
-            i_A = 0  # index on diagonal of A
-            for j in range(n_ports):
-                for pole in poles:
-                    if np.imag(pole) == 0.0:
-                        # Real pole
-                        A[i_A, i_A] = np.real(pole)
-                        B[i_A, j] = 1
-                        i_A += 1
-                    else:
-                        # Complex-conjugate pole
-                        A[i_A, i_A] = np.real(pole)
-                        A[i_A, i_A + 1] = np.imag(pole)
-                        A[i_A + 1, i_A] = -1 * np.imag(pole)
-                        A[i_A + 1, i_A + 1] = np.real(pole)
-                        B[i_A, j] = 2
-                        i_A += 2
-
-        else:
-            # Build A and B only for the specified response
-            n_matrix = (n_poles_real + 2 * n_poles_complex)
-
-            # State-space matrix A holds the poles on the diagonal as real values with imaginary parts
-            # on the sub-diagonal. State-space matrix B holds coefficients (1, 2, or 0), depending
-            # on the respective type of pole in A
-
-            # Assemble A = [[poles_real,   0,                  0],
-            #               [0,            real(poles_complex),   imag(poles_complex],
-            #               [0,            -imag(poles_complex),  real(poles_complex]]
-            A = np.identity(n_matrix)
-            B = np.zeros(shape=(n_matrix, 1))
-            i_A = 0  # index on diagonal of A
-            for pole in poles:
-                if np.imag(pole) == 0.0:
-                    # Real pole
-                    A[i_A, i_A] = np.real(pole)
-                    B[i_A, 0] = 1
-                    i_A += 1
-                else:
-                    # Complex-conjugate pole
-                    A[i_A, i_A] = np.real(pole)
-                    A[i_A, i_A + 1] = np.imag(pole)
-                    A[i_A + 1, i_A] = -1 * np.imag(pole)
-                    A[i_A + 1, i_A + 1] = np.real(pole)
-                    B[i_A, 0] = 2
-                    i_A += 2
-
-        return A, B
-
-
-    def _get_state_space_AB_complex(self, idx_pole_group
-                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Private method.
-        Returns the complex-valued system matrix A of the state-space representation of the rational model, as
-        defined in [#]_.
-
-        Returns
-        -------
-        A : ndarray
-            State-space matrix A holding the poles on the diagonal
-
-        Raises
-        ------
-        ValueError
-            If the model parameters have not been initialized (by running :func:`vector_fit()` or :func:`read_npz()`).
-
-        References
-        ----------
-        .. [#] B. Gustavsen and A. Semlyen, "Fast Passivity Assessment for S-Parameter Rational Models Via a Half-Size
-            Test Matrix," in IEEE Transactions on Microwave Theory and Techniques, vol. 56, no. 12, pp. 2701-2708,
-            Dec. 2008, DOI: 10.1109/TMTT.2008.2007319.
-        """
-
-        # Initial checks
-        if self.poles is None:
-            raise ValueError('poles = None; nothing to do. You need to run vector_fit() first.')
-        if self.residues is None:
-            raise ValueError('self.residues = None; nothing to do. You need to run vector_fit() first.')
-        if self.proportional is None:
-            raise ValueError('self.proportional = None; nothing to do. You need to run vector_fit() first.')
-        if self.constant is None:
-            raise ValueError('self.constant = None; nothing to do. You need to run vector_fit() first.')
-
-        # Assemble real-valued state-space matrices A, B, C, D, E from fitted complex-valued pole-residue model
-
-        # Get data
-        poles=self.poles[idx_pole_group]
-        residues=self.residues[idx_pole_group]
-
-        # Determine size of the matrix system. Note: This is the n_ports inside of
-        # the pole group and not the n_ports of the entire network!
-        n_ports = int(np.sqrt(np.shape(residues)[0]))
-
-        n_poles_real = np.sum(poles.imag == 0)
-        n_poles_complex = np.sum(poles.imag != 0)
-
-        n_matrix = (n_poles_real + 2 * n_poles_complex) * n_ports
-
-        # State-space matrix A holds the poles on the diagonal
-        # Assemble A = [[pole_real,   0,                  0],
-        #               [0,           pole_complex,   0],
-        #               [0,           0,              pole_complex*]
-        A = np.identity(n_matrix)
-        B = np.zeros(shape=(n_matrix, n_ports))
-        i_A = 0  # index on diagonal of A
-        for j in range(n_ports):
-            for pole in poles:
-                if np.imag(pole) == 0.0:
-                    # Real pole
-                    A[i_A, i_A] = np.real(pole)
-                    B[i_A, j] = 1
-                    i_A += 1
-                else:
-                    # Complex-conjugate pole
-                    A[i_A, i_A] = pole
-                    A[i_A + 1, i_A + 1] = np.conj(pole)
-                    B[i_A, j] = 1
-                    B[i_A, j + 1] = 1
-                    i_A += 2
-        return A, B
 
     @staticmethod
     def _get_S_from_state_space_ABCDE(s: np.ndarray,
@@ -4843,18 +4416,19 @@ class VectorFitting:
                 idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
                 idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
                 residues = self.residues[idx_pole_group][idx_pole_group_member]
-                residues_modified = self.residues_modified[idx_pole_group][idx_pole_group_member]
                 poles = self.poles[idx_pole_group]
+                constant = self.constant[idx_pole_group][idx_pole_group_member]
+                residues_modified, constant_modified = \
+                    self._get_residues_and_constant_modified(poles, residues, constant)
                 # Initialize constant to constant_modified (dc value only)
-                constant = self.constant_modified[idx_pole_group][idx_pole_group_member]
+                constant = constant_modified
                 idx_column_Ct = 0
                 C_modified_response = C_modified_view[i][j]
-                # Update residues and residues_modified
+                # Update residues
                 for idx_residue, residue in enumerate(residues):
                     if np.imag(residue) == 0.0:
                         # Real residue
                         residues[idx_residue] = C_modified_response[idx_column_Ct] * poles[idx_residue]
-                        residues_modified[idx_residue] = C_modified_response[idx_column_Ct]
                         constant += np.real(C_modified_response[idx_column_Ct])
                         idx_column_Ct += 1
                     else:
@@ -4862,8 +4436,6 @@ class VectorFitting:
                         residues[idx_residue] = \
                             (C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]) * \
                                 poles[idx_residue]
-                        residues_modified[idx_residue] = \
-                            C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]
                         constant += 2 * np.real(C_modified_response[idx_column_Ct])
                         idx_column_Ct += 2
                 # Update constant
