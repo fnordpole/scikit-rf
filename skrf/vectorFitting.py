@@ -2310,7 +2310,7 @@ class VectorFitting:
 
         # Get rational basis functions (RBF)
         rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im = \
-            self._get_rational_basis_functions(s, poles, modified = dc_preserving_fit)
+            self._get_rational_basis_functions(s, poles, dc_preserving_fit)
 
         # Build matrix A
         A = np.empty((n_responses, n_freqs, n_C), dtype=complex)
