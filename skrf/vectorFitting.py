@@ -250,6 +250,11 @@ class VectorFitting:
         #
         # Method 'svd' (default) uses singular value decomposition based clippig.
 
+        # Check whether data passivity at dc is enabled
+        if not enforce_data_passivity_at_dc:
+            warnings.warn('Warning: Data passivity enforcement at DC is disabled!', UserWarning, stacklevel=2)
+            return
+
         n_ports = int(np.sqrt(np.size(responses, axis = 0)))
 
         # Get S_DC and take the real part of it. The DC point cannot have imaginary parts. Maybe we can
@@ -274,10 +279,7 @@ class VectorFitting:
 
         warnings.warn('Warning: Data is not passive at DC', UserWarning, stacklevel=2)
 
-        # Check whether data passivity at dc is enabled
-        if not enforce_data_passivity_at_dc:
-            warnings.warn('Warning: Data passivity enforcement at DC is disabled!', UserWarning, stacklevel=2)
-            return
+
 
         logger.info('Starting data passivity enforcement at DC')
 
