@@ -2006,9 +2006,9 @@ class VectorFitting:
 
             # Right hand side b_dense
             b_dense = np.zeros(n_responses * n_rows_R22 + 1)
-            b_dense[-1] = weight_extra * n_samples * d_tilde_norm
+            b_dense[-1] = weight_extra * n_samples# * d_tilde_norm
 
-        return A_dense, b_dense, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im
+        return A_dense, b_dense, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im, d_tilde_norm
 
     def _get_C_tilde_and_d_tilde_from_C_tilde_modified(self, poles, C_tilde_modified):
         # Converts C_tilde_modified of the modified VF form to C_tilde of the original VF form
@@ -2235,7 +2235,7 @@ class VectorFitting:
         # Get R22 equation system A_dense x_dense = b_dense
         # x_dense will contain the C_tilde. The idx_x_dense* are the indices of the
         # real and complex residues in C_tilde.
-        A_dense, b_dense, idx_x_dense_re, idx_x_dense_complex_re, idx_x_dense_complex_im = \
+        A_dense, b_dense, idx_x_dense_re, idx_x_dense_complex_re, idx_x_dense_complex_im, d_tilde_norm = \
             self._get_R22_equation_system(
                 responses, weights, poles, omega,
                 fit_constant, fit_proportional,
@@ -2256,7 +2256,7 @@ class VectorFitting:
             # Convert C_tilde_modified into C_tilde and d_tilde
             C_tilde, d_tilde = self._get_C_tilde_and_d_tilde_from_C_tilde_modified(poles, C_tilde)
         else:
-            d_tilde = C_tilde[-1]
+            d_tilde = C_tilde[-1] * d_tilde_norm
             C_tilde = C_tilde[:-1]
 
         # Calculates a new set of poles by calculating the eigenvalues of matrix H
