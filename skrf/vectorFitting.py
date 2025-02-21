@@ -348,16 +348,17 @@ class VectorFitting:
                 idx_response = i * n_ports + j
                 responses[idx_response, 0] = S_DC[i, j]
 
-    def _print_algorithm_info_messsage(self, dc_preserving_fit, fit_constant, fit_proportional):
+    def _print_algorithm_info_messsage(self, preserve_dc, fit_constant, fit_proportional):
         # Warn if fit_constant is enabled while dc_preserving fit is also enabled
-        if fit_constant and dc_preserving_fit:
-            warnings.warn('Ignoring fit_constant=True because dc_preserving_fit is enabled')
+        if fit_constant and preserve_dc:
+            warnings.warn('Ignoring fit_constant=True because preserve_dc is enabled')
 
         # Print algorithm info message
-        if dc_preserving_fit:
-            print(f'Using DC preserving fit. fit_proportional={fit_proportional}')
+        if preserve_dc:
+            print(f'Algorithm info: preserve_dc={preserve_dc} fit_proportional={fit_proportional}')
         else:
-            print(f'Not using DC preserving fit. fit_constant={fit_constant} fit_proportional={fit_proportional}')
+            print(f'Algorithm info: preserve_dc={preserve_dc} fit_constant={fit_constant}'
+                  'fit_proportional={fit_proportional}')
 
     def vector_fit(self,
                  # Initial poles
@@ -395,7 +396,7 @@ class VectorFitting:
                  enforce_data_passivity_at_dc = True,
 
                  # Enable dc preserving fit
-                 dc_preserving_fit = True,
+                 preserve_dc = True,
                  ) -> None:
         """
         Main work routine performing the vector fit. The results will be stored in the class variables
@@ -471,7 +472,7 @@ class VectorFitting:
 
         fit_constant: bool, optional
             Decide whether the constant term d is fitted or not.
-            If dc_preserving_fit is True, fit_constant is ignored and the DC point will always be set to the
+            If preserve_dc is True, fit_constant is ignored and the DC point will always be set to the
             exact value of the data at DC.
 
         fit_proportional: bool, optional
@@ -515,12 +516,12 @@ class VectorFitting:
             A warning will be printed if the DC point is non-passive in any case, so you have the chance to provide
             better data at DC that is passive, avoiding subsequent errors due to the passivity enforcement.
 
-        dc_preserving_fit: bool, optional
+        preserve_dc: bool, optional
             Enables a DC preserving with with modified rational basis functions. The DC point of the fit will be
             exactly the DC point of the data and the fit will not modify it.
 
             It is important to set enforce_data_passivity_at_dc to True because the passivity_enforce() algorithm
-            will also not be able to modify the DC point if you fitted with dc_preserving_fit = True. Thus, if the
+            will also not be able to modify the DC point if you fitted with preserve_dc = True. Thus, if the
             DC point in the data is not passive, it will be impossible to make the entire model passive.
 
         Returns
@@ -580,7 +581,7 @@ class VectorFitting:
             poles_init = [poles_init] * n_pole_groups
 
         # Print algorithm info message
-        self._print_algorithm_info_messsage(dc_preserving_fit, fit_constant, fit_proportional)
+        self._print_algorithm_info_messsage(preserve_dc, fit_constant, fit_proportional)
 
         # Fit each pole group
         for idx_pole_group in range(n_pole_groups):
@@ -600,7 +601,7 @@ class VectorFitting:
             # Call _vector_fit
             poles, residues, constant, proportional = self._vector_fit(
                 poles, omega, responses[indices_responses], weights[indices_responses],
-                fit_constant, fit_proportional, memory_saver, dc_preserving_fit,
+                fit_constant, fit_proportional, memory_saver, preserve_dc,
                 max_iterations, stagnation_threshold, abstol)
 
             # Save results
@@ -616,7 +617,7 @@ class VectorFitting:
         self.print_model_summary(verbose)
 
     def _vector_fit(self, poles, omega, responses, weights, fit_constant, fit_proportional,
-                    memory_saver, dc_preserving_fit, max_iterations, stagnation_threshold, abstol):
+                    memory_saver, preserve_dc, max_iterations, stagnation_threshold, abstol):
         # This implements the core algorithm of vector fitting.
         # _vector_fit is called by vector_fit. For a description of the arguments see vector_fit.
 
@@ -632,7 +633,7 @@ class VectorFitting:
 
             # Relocate poles
             poles, d_tilde = self._relocate_poles(
-                poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
+                poles, omega, responses, weights, fit_constant, fit_proportional, preserve_dc, memory_saver)
 
             # Check relative change of maximum singular value in A_dense stopping condition
             dRelMaxSv=self.delta_rel_max_singular_value_A_dense_history[-1]
@@ -645,7 +646,7 @@ class VectorFitting:
             if np.mod(iteration, 25) == 0:
                 # Fit residues with the previously calculated poles
                 residues, constant, proportional = self._fit_residues(
-                    poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
+                    poles, omega, responses, weights, fit_constant, fit_proportional, preserve_dc)
 
                 # Calculate error_max
                 error_max = np.max(self._get_delta(poles, residues, constant, proportional, omega, responses, weights))
@@ -681,7 +682,7 @@ class VectorFitting:
 
         # Fit residues with the previously calculated poles
         residues, constant, proportional = self._fit_residues(
-            poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
+            poles, omega, responses, weights, fit_constant, fit_proportional, preserve_dc)
 
         return poles, residues, constant, proportional
 
@@ -722,7 +723,7 @@ class VectorFitting:
                  enforce_data_passivity_at_dc = True,
 
                  # Enable dc preserving fit
-                 dc_preserving_fit = True,
+                 preserve_dc = True,
                  ) -> (np.ndarray, np.ndarray):
         """
         Automatic fitting routine implementing the "vector fitting with adding and skimming" algorithm as proposed in
@@ -817,7 +818,7 @@ class VectorFitting:
 
         fit_constant: bool, optional
             Decide whether the constant term d is fitted or not.
-            If dc_preserving_fit is True, fit_constant is ignored and the DC point will always be set to the
+            If preserve_dc is True, fit_constant is ignored and the DC point will always be set to the
             exact value of the data at DC.
 
         fit_proportional: bool, optional
@@ -901,12 +902,12 @@ class VectorFitting:
             A warning will be printed if the DC point is non-passive in any case, so you have the chance to provide
             better data at DC that is passive, avoiding subsequent errors due to the passivity enforcement.
 
-        dc_preserving_fit: bool, optional
+        preserve_dc: bool, optional
             Enables a DC preserving with with modified rational basis functions. The DC point of the fit will be
             exactly the DC point of the data and the fit will not modify it.
 
             It is important to set enforce_data_passivity_at_dc to True because the passivity_enforce() algorithm
-            will also not be able to modify the DC point if you fitted with dc_preserving_fit = True. Thus, if the
+            will also not be able to modify the DC point if you fitted with preserve_dc = True. Thus, if the
             DC point in the data is not passive, it will be impossible to make the entire model passive.
 
         Returns
@@ -963,7 +964,7 @@ class VectorFitting:
             poles_init = [poles_init] * n_pole_groups
 
         # Print algorithm info message
-        self._print_algorithm_info_messsage(dc_preserving_fit, fit_constant, fit_proportional)
+        self._print_algorithm_info_messsage(preserve_dc, fit_constant, fit_proportional)
 
         # Save n_poles_add_max
         saved_n_poles_add_max = n_poles_add_max
@@ -997,7 +998,7 @@ class VectorFitting:
             # Call _auto_fit
             poles, residues, constant, proportional = self._auto_fit(
                 poles, omega, responses[indices_responses], weights[indices_responses],
-                fit_constant, fit_proportional, dc_preserving_fit, memory_saver,
+                fit_constant, fit_proportional, preserve_dc, memory_saver,
                 n_iterations_pre, n_iterations, n_iterations_post,
                 error_stagnation_threshold, spurious_pole_threshold,
                 abstol, model_order_max, n_poles_add_max)
@@ -1016,7 +1017,7 @@ class VectorFitting:
 
     def _auto_fit(self,
         poles, omega, responses, weights,
-        fit_constant, fit_proportional, dc_preserving_fit, memory_saver,
+        fit_constant, fit_proportional, preserve_dc, memory_saver,
         n_iterations_pre, n_iterations, n_iterations_post,
         error_stagnation_threshold, spurious_pole_threshold, abstol, model_order_max, n_poles_add_max):
 
@@ -1031,11 +1032,11 @@ class VectorFitting:
         for _ in range(n_iterations_pre):
             poles, d_tilde = self._relocate_poles(
                 poles, omega, responses, weights,
-                fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
+                fit_constant, fit_proportional, preserve_dc, memory_saver)
 
         # Fit residues
         residues, constant, proportional = self._fit_residues(
-            poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
+            poles, omega, responses, weights, fit_constant, fit_proportional, preserve_dc)
 
         # Calculate delta
         delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -1082,11 +1083,11 @@ class VectorFitting:
             for _ in range(n_iterations):
                 poles, d_tilde, = self._relocate_poles(
                     poles, omega, responses, weights,
-                    fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
+                    fit_constant, fit_proportional, preserve_dc, memory_saver)
 
             # Fit residues
             residues, constant, proportional = self._fit_residues(
-                poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit)
+                poles, omega, responses, weights, fit_constant, fit_proportional, preserve_dc)
 
             # Calculate delta
             delta = self._get_delta(poles, residues, constant, proportional, omega, responses, weights)
@@ -1132,12 +1133,12 @@ class VectorFitting:
         for _ in range(n_iterations_post):
             poles, d_tilde = self._relocate_poles(
                 poles, omega, responses, weights,
-                fit_constant, fit_proportional, dc_preserving_fit, memory_saver)
+                fit_constant, fit_proportional, preserve_dc, memory_saver)
 
         # Final residue fitting
         residues, constant, proportional = self._fit_residues(
             poles, omega, responses, weights,
-            fit_constant, fit_proportional, dc_preserving_fit)
+            fit_constant, fit_proportional, preserve_dc)
 
         return poles, residues, constant, proportional
 
@@ -1805,7 +1806,7 @@ class VectorFitting:
     def _get_R22_equation_system(self,
         responses, weights, poles, omega,
         fit_constant, fit_proportional,
-        dc_preserving_fit, memory_saver):
+        preserve_dc, memory_saver):
 
         s = 1j * omega
 
@@ -1819,7 +1820,7 @@ class VectorFitting:
         n_C = n_poles
 
         # Get index of constant term if we have it
-        if not dc_preserving_fit and fit_constant:
+        if not preserve_dc and fit_constant:
             idx_const = [n_C]
             n_C += 1
 
@@ -1829,7 +1830,7 @@ class VectorFitting:
             n_C += 1
 
         # Number of elements in C~ = C_tilde
-        if dc_preserving_fit:
+        if preserve_dc:
             n_C_tilde = n_poles
         else:
             # Need + 1 for d~ = d_tilde
@@ -1842,15 +1843,15 @@ class VectorFitting:
         # Initialize R22
         R22 = np.empty((n_responses, n_rows_R22, n_C_tilde))
 
-        # Initialize RHS. We only need it for dc_preserving_fit. Otherwise RHS = 0. In this case
+        # Initialize RHS. We only need it for preserve_dc. Otherwise RHS = 0. In this case
         # b_dense will be created directly using np.zeros later instead of reshaping RHS.
-        if dc_preserving_fit:
+        if preserve_dc:
             # RHS = Q^T (H-d)
             RHS = np.empty((n_responses, n_rows_R22))
 
         # Get rational basis functions (RBF)
         rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im = \
-            self._get_rational_basis_functions(s, poles, dc_preserving_fit)
+            self._get_rational_basis_functions(s, poles, preserve_dc)
 
         if not memory_saver:
             # We build all rows of A at once and run the QR factorization using
@@ -1869,7 +1870,7 @@ class VectorFitting:
             A[:, :, idx_rbf_re] = weights[:, :, None] * rbf_real[None, :, :]
             A[:, :, idx_rbf_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
             A[:, :, idx_rbf_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
-            if not dc_preserving_fit and fit_constant:
+            if not preserve_dc and fit_constant:
                 A[:, :, idx_const] = 1 * weights[:, :, None]
             if fit_proportional:
                 A[:, :, idx_prop] = weights[:, :, None] * s[None, :, None]
@@ -1880,7 +1881,7 @@ class VectorFitting:
                 -1 * weights[:, :, None] * rbf_complex_re[None, :, :] * responses[:, :, None]
             A[:, :, n_C + idx_rbf_complex_im] = \
                 -1 * weights[:, :, None] * rbf_complex_im[None, :, :] * responses[:, :, None]
-            if not dc_preserving_fit:
+            if not preserve_dc:
                 A[:, :, -1] = -1 * weights[:, :] * responses[:, :]
 
             # The numpy QR decomposition in mode 'r' will be A = Q R
@@ -1911,7 +1912,7 @@ class VectorFitting:
             # complex C_tilde and it would be impossible to convert it back to
             # real only because (a+jb)*(c+jd)=ac-bd+j(bc+ad) so all the parts
             # are mixed up between A and x in the solution.
-            if dc_preserving_fit:
+            if preserve_dc:
                 Q, R = np.linalg.qr(np.hstack((A.real, A.imag)), 'reduced')
 
                 # Get R22
@@ -1942,7 +1943,7 @@ class VectorFitting:
                 A[:, idx_rbf_re] = weights[i, :, None] * rbf_real[None, :, :]
                 A[:, idx_rbf_complex_re] = weights[i, :, None] * rbf_complex_re[None, :, :]
                 A[:, idx_rbf_complex_im] = weights[i, :, None] * rbf_complex_im[None, :, :]
-                if not dc_preserving_fit and fit_constant:
+                if not preserve_dc and fit_constant:
                     A[:, idx_const] = 1 * weights[i, :, None]
                 if fit_proportional:
                     A[:, idx_prop] = weights[i, :, None] * s[None, :, None]
@@ -1953,12 +1954,12 @@ class VectorFitting:
                     -1 * weights[i, :, None] * rbf_complex_re[None, :, :] * responses[i, :, None]
                 A[:, n_C + idx_rbf_complex_im] = \
                     -1 * weights[i, :, None] * rbf_complex_im[None, :, :] * responses[i, :, None]
-                if not dc_preserving_fit:
+                if not preserve_dc:
                     A[:, -1] = -1 * weights[i, :] * responses[i, :]
 
                 # QR decomposition. Note: Here we have to use vstack instead of hstack
                 # to stack in the first dimension (freq).
-                if dc_preserving_fit:
+                if preserve_dc:
                     R = np.linalg.qr(np.vstack((A.real, A.imag)), 'r')
 
                     # Get R22
@@ -1979,7 +1980,7 @@ class VectorFitting:
 
         # Build A_dense. This is the representation of the initial big system
         # matrix A with the sparsity and the unused C terms removed.
-        if dc_preserving_fit:
+        if preserve_dc:
             A_dense = np.empty((n_responses * n_rows_R22, n_C_tilde))
             A_dense = R22.reshape((n_responses * n_rows_R22, n_C_tilde))
 
@@ -2067,7 +2068,7 @@ class VectorFitting:
 
     def _relocate_poles(self,
         poles, omega, responses, weights,
-        fit_constant, fit_proportional, dc_preserving_fit, memory_saver):
+        fit_constant, fit_proportional, preserve_dc, memory_saver):
 
         # In general, we have one "big" system Ax=b, in which the solution
         # vector x contains all Ci and C~:
@@ -2241,7 +2242,7 @@ class VectorFitting:
             self._get_R22_equation_system(
                 responses, weights, poles, omega,
                 fit_constant, fit_proportional,
-                dc_preserving_fit, memory_saver)
+                preserve_dc, memory_saver)
 
         # Condition number of the linear system
         cond_A_dense = np.linalg.cond(A_dense)
@@ -2254,7 +2255,7 @@ class VectorFitting:
         full_rank_A_dense = np.min(A_dense.shape)
         rank_deficiency_A_dense = full_rank_A_dense - rank_A_dense
 
-        if dc_preserving_fit:
+        if preserve_dc:
             # Convert C_tilde_modified into C_tilde and d_tilde
             C_tilde, d_tilde = self._get_C_tilde_and_d_tilde_from_C_tilde_modified(poles, C_tilde)
         else:
@@ -2287,7 +2288,7 @@ class VectorFitting:
 
         return poles, d_tilde
 
-    def _fit_residues(self, poles, omega, responses, weights, fit_constant, fit_proportional, dc_preserving_fit):
+    def _fit_residues(self, poles, omega, responses, weights, fit_constant, fit_proportional, preserve_dc):
         n_responses, n_freqs = np.shape(responses)
         s = 1j * omega
 
@@ -2301,7 +2302,7 @@ class VectorFitting:
         n_C = n_poles
 
         # Get index of constant term if we have it
-        if not dc_preserving_fit and fit_constant:
+        if not preserve_dc and fit_constant:
             idx_const = [n_C]
             n_C += 1
 
@@ -2312,7 +2313,7 @@ class VectorFitting:
 
         # Get rational basis functions (RBF)
         rbf_real, rbf_complex_re, rbf_complex_im, idx_rbf_re, idx_rbf_complex_re, idx_rbf_complex_im = \
-            self._get_rational_basis_functions(s, poles, dc_preserving_fit)
+            self._get_rational_basis_functions(s, poles, preserve_dc)
 
         # Build matrix A
         A = np.empty((n_responses, n_freqs, n_C), dtype=complex)
@@ -2322,7 +2323,7 @@ class VectorFitting:
         A[:, :, idx_rbf_complex_re] = weights[:, :, None] * rbf_complex_re[None, :, :]
         A[:, :, idx_rbf_complex_im] = weights[:, :, None] * rbf_complex_im[None, :, :]
 
-        if not dc_preserving_fit and fit_constant:
+        if not preserve_dc and fit_constant:
             d_norm=np.empty(n_responses)
             d_norm[:]=np.asarray(
                 [np.linalg.norm(A[i, :, :idx_const[0]-1]) / (n_freqs*(idx_const[0])) for i in range(n_responses)])
@@ -2337,7 +2338,7 @@ class VectorFitting:
             A[:, :, idx_prop] = e_norm[:, None, None] * weights[:, :, None] * s[None, :, None]
 
         # Build responses_weigthed
-        if dc_preserving_fit:
+        if preserve_dc:
             responses_weighted_dc = responses[:, 0] * weights[:, 0]
             responses_weighted = responses * weights - responses_weighted_dc[:, None]
         else:
@@ -2358,7 +2359,7 @@ class VectorFitting:
         # Residues holds the residues in standard partial fraction form
         residues = np.empty((len(responses), len(poles)), dtype=complex)
 
-        if dc_preserving_fit:
+        if preserve_dc:
             residues[:, idx_poles_real] = x[:, idx_rbf_re] * np.real(poles[idx_poles_real])
             residues[:, idx_poles_complex] = \
                 (x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]) * poles[idx_poles_complex]
@@ -2367,14 +2368,14 @@ class VectorFitting:
             residues[:, idx_poles_complex] = x[:, idx_rbf_complex_re] + 1j * x[:, idx_rbf_complex_im]
 
         # Constant
-        if dc_preserving_fit:
+        if preserve_dc:
             # Constant in standard partial fraction form
             constant = np.real(responses[:, 0]) + \
                 np.sum(np.real(x[:, idx_rbf_re]), axis = 1) + \
                 2 * np.sum(np.real(x[:, idx_rbf_complex_re]), axis = 1)
 
-        elif not dc_preserving_fit and fit_constant:
-            # Not dc_preserving_fit and fit_constant
+        elif not preserve_dc and fit_constant:
+            # Not preserve_dc and fit_constant
             constant = np.matrix.flatten(x[:, idx_const]) * d_norm
 
         else:
@@ -3675,6 +3676,7 @@ class VectorFitting:
         verbose = False,
         perturb_constant = False,
         asymptotic_method = 'optimizer',
+        preserve_dc = True,
         ) -> None:
         """
         Enforces the passivity of the vector fitted model, if required. This is an implementation of the method
@@ -3701,6 +3703,10 @@ class VectorFitting:
             Enables or disables constant perturbation in passivity enforcement. If this is enabled, the DC point
             may be affected in a negative way. It is thus disabled by default. Use it only if passivity enforcement
             is not successful without it.
+
+        preserve_dc:
+            Enables the DC preserving passivity enforcement. Must be set to the same value that was used for
+            preserve_dc in auto_fit or vector_fit.
 
         Returns
         -------
@@ -3737,9 +3743,14 @@ class VectorFitting:
             Feb. 2009, DOI: 10.1109/TMTT.2008.2011201.
         """
 
-        self._passivity_enforce_new(
-            n_samples, n_samples_per_band, maximum_frequency_of_interest, parameter_type,
-            max_iterations, verbose, perturb_constant, asymptotic_method)
+        if preserve_dc:
+            self._passivity_enforce_preserve_dc(
+                n_samples, n_samples_per_band, maximum_frequency_of_interest, parameter_type,
+                max_iterations, verbose, asymptotic_method)
+        else:
+            self._passivity_enforce(
+                n_samples, n_samples_per_band, maximum_frequency_of_interest, parameter_type,
+                max_iterations, verbose, perturb_constant)
 
         # Print model summary
         self.print_model_summary(verbose)
@@ -3760,7 +3771,12 @@ class VectorFitting:
         verbose,
         perturb_constant,
         ) -> None:
-        # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
+        # Passivity enforcement. Description of arguments see passivity_enforce()
+        #
+        # The method is presented in:
+        # "Efficient Algorithm for Passivity Enforcement of S -Parameter-Based Macromodels",
+        # Tom Dhaene, Dirk Deschrijver, Nobby Stevens,
+        # IEEE Transactions On Microwave Theory And Techniques, Vol. 57, No. 2, February 2009
 
         if parameter_type.lower() != 's':
             raise NotImplementedError('Passivity testing is currently only supported for scattering (S) parameters.')
@@ -3820,7 +3836,7 @@ class VectorFitting:
 
         # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
         # how this parameter influences the algorithm.
-        # This parameter has a really strong influence on the rms error in some tests I ran. Using 1-1e-4 instead
+        # This parameter has a strong influence on the rms error in some tests I ran. Using 1-1e-4 instead
         # of 1-1e-3 resulted in about 100x less rms error. On the other hand, it does not converge for 1-1e-5.
         # So this algorithm seems to be extremely sensitive to the value of delta which is contradicting the
         # paper that's not specific about the value of delta.
@@ -3870,6 +3886,9 @@ class VectorFitting:
 
                 # Build A_ls for the least squares problem A x = b
                 A_ls[i][j] = np.vstack((np.real(F1_transpose), np.imag(F1_transpose)))
+
+        # Save C to compare after perturbation
+        C_original = np.copy(C)
 
         # Iterative compensation of passivity violations
         iteration = 0
@@ -3940,101 +3959,38 @@ class VectorFitting:
             # Increment iteration counter
             iteration += 1
 
-        if verbose:
-            print(f'Passivity enforcement converged in {iteration} iterations')
+        # Calculate dC/C
+        C_delta = C - C_original
+        C_delta_norm_rel = \
+            np.linalg.norm(C_delta, ord='fro') / np.linalg.norm(C_original, ord='fro')
+        print(f'Passivity enforcement dC/C = {C_delta_norm_rel:.1e}')
 
         # Warn if maximum number of iterations has been exceeded
         if iteration == max_iterations:
             warnings.warn('Passivity enforcement: Aborting after the max. number of iterations has been '
                           'exceeded.', RuntimeWarning, stacklevel=2)
+            return
 
-        # Update residues
-        for i in range(n_ports):
-            for j in range(n_ports):
-                idx_response = i * n_ports + j
-                idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
-                idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
-                residues = self.residues[idx_pole_group][idx_pole_group_member]
-                idx_column_Ct = 0
-                C_response = C_view[i][j]
-                for idx_residue, residue in enumerate(residues):
-                    if np.imag(residue) == 0.0:
-                        # Real residue
-                        residues[idx_residue] = C_response[idx_column_Ct]
-                        idx_column_Ct += 1
-                    else:
-                        # Complex-conjugate residue
-                        residues[idx_residue] = \
-                            C_response[idx_column_Ct] + 1j * C_response[idx_column_Ct + 1]
-                        idx_column_Ct += 2
+        # Update model
+        self._passivity_update_model(C_view,
+            preserve_dc = False, have_D = have_D, perturb_constant = perturb_constant, D = D)
 
-        # Update constant
-        if have_D and perturb_constant:
-            for i in range(n_ports):
-                for j in range(n_ports):
-                    idx_response = i * n_ports + j
-                    idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
-                    idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
-                    self.constant[idx_pole_group][idx_pole_group_member] = D[i, j]
+        print(f'Finished passivity enforcement after {iteration} iterations')
 
-    def _passivity_get_eval_frequencies(self,
-        maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type):
-        # Creates "dense set of frequencies" with n_samples from DC to highest_relevant_omega
-        # and an additional n_samples_per_band for every violation band.
-
-        # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
-        # This highest relevant frequency is the maximum of the highest crossing from a nonpassive to a passive region
-        # on one hand and the maximum frequency of interest on the other hand [1]
-
-        # Get violation bands
-        violation_bands = self.passivity_test(parameter_type)
-
-        # Get highest crossing from a nonpassive to a passive region
-        omega_highest_crossing = violation_bands[-1, 1]
-
-        # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
-        if np.isinf(omega_highest_crossing):
-            # The paper doesn't specify what to do in this case. I set it to 1.5 omega_start for now
-            # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
-            # to a passive region as specified in the paper.
-            omega_highest_crossing = 1.5 * violation_bands[-1, 0]
-
-            # Update last violation band
-            violation_bands[-1, 1] =  omega_highest_crossing
-
-            warnings.warn('Passivity violations are unbounded',
-                UserWarning, stacklevel=2)
-
-        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
-        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
-
-        # Create omega_eval for every violation band
-        n_bands = np.size(violation_bands, axis = 0)
-        omega_eval_bands = np.empty((n_bands, n_samples_per_band))
-        for i in range(n_bands):
-            omega_eval_bands[i] = \
-                np.linspace(violation_bands[i, 0], violation_bands[i, 1], n_samples_per_band)
-
-        # Create omega_eval and s_eval
-        omega_eval = np.append(
-            np.linspace(0, 1.2 * highest_relevant_omega, n_samples),
-            omega_eval_bands.flatten())
-
-        s_eval = 1j * omega_eval
-
-        return omega_eval, s_eval
-
-    def _passivity_enforce_new(self,
+    def _passivity_enforce_preserve_dc(self,
         n_samples,
         n_samples_per_band,
         maximum_frequency_of_interest,
         parameter_type,
         max_iterations,
         verbose,
-        perturb_constant,
         asymptotic_method = 'least-squares',
         ) -> None:
-        # Implements core of passivity_enforce. Description of arguments see passivity_enforce()
+        # DC preserving passivity enforcement. Description of arguments see passivity_enforce()
+        #
+        # The method is presented in:
+        # "DC-Preserving Passivity Enforcement for S-Parameter Based Macromodels", Dirk Deschrijver, Tom Dhaene
+        # IEEE Transactions On Microwave Theory And Thechniques, Vol. 58, No. 4, April 2010
 
         if parameter_type.lower() != 's':
             raise NotImplementedError('Passivity testing is currently only supported for scattering (S) parameters.')
@@ -4409,48 +4365,129 @@ class VectorFitting:
             return
 
         # Update model
-        self._passivity_update_model(C_modified_view)
+        self._passivity_update_model(C_modified_view, preserve_dc = True)
 
         print(f'Finished uniform passivity enforcement after {iteration} iterations')
 
-    def _passivity_update_model(self, C_modified_view):
-        # Updates residues, residues_modified and constant of the model
-        # using state space C_modified via a C_modified view
+    def _passivity_get_eval_frequencies(self,
+        maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type):
+        # Creates "dense set of frequencies" with n_samples from DC to highest_relevant_omega
+        # and an additional n_samples_per_band for every violation band.
+
+        # First, dense set of frequencies is determined from dc up to about 20% above the highest relevant frequency.
+        # This highest relevant frequency is the maximum of the highest crossing from a nonpassive to a passive region
+        # on one hand and the maximum frequency of interest on the other hand [1]
+
+        # Get violation bands
+        violation_bands = self.passivity_test(parameter_type)
+
+        # Get highest crossing from a nonpassive to a passive region
+        omega_highest_crossing = violation_bands[-1, 1]
+
+        # Deal with unbounded violation interval (omega_highest_crossing == np.inf)
+        if np.isinf(omega_highest_crossing):
+            # The paper doesn't specify what to do in this case. I set it to 1.5 omega_start for now
+            # but I don't understand the implications of this yet. It's certainly not a crossing from a nonpassive
+            # to a passive region as specified in the paper.
+            omega_highest_crossing = 1.5 * violation_bands[-1, 0]
+
+            # Update last violation band
+            violation_bands[-1, 1] =  omega_highest_crossing
+
+            warnings.warn('Passivity violations are unbounded',
+                UserWarning, stacklevel=2)
+
+        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
+        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
+
+        # Create omega_eval for every violation band
+        n_bands = np.size(violation_bands, axis = 0)
+        omega_eval_bands = np.empty((n_bands, n_samples_per_band))
+        for i in range(n_bands):
+            omega_eval_bands[i] = \
+                np.linspace(violation_bands[i, 0], violation_bands[i, 1], n_samples_per_band)
+
+        # Create omega_eval and s_eval
+        omega_eval = np.append(
+            np.linspace(0, 1.2 * highest_relevant_omega, n_samples),
+            omega_eval_bands.flatten())
+
+        s_eval = 1j * omega_eval
+
+        return omega_eval, s_eval
+
+    def _passivity_update_model(self, C_view,
+        preserve_dc = True,
+        have_D = False,
+        perturb_constant = False,
+        D = None,
+        ):
+        # Updates residues and constant of the model using state space C via C_view
 
         # Get the number of ports
         n_ports = self._get_n_ports()
 
-        # Update residues, residues_modified and constant
-        for i in range(n_ports):
-            for j in range(n_ports):
-                idx_response = i * n_ports + j
-                idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
-                idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
-                residues = self.residues[idx_pole_group][idx_pole_group_member]
-                poles = self.poles[idx_pole_group]
-                constant = self.constant[idx_pole_group][idx_pole_group_member]
-                residues_modified, constant_modified = \
-                    self._get_residues_and_constant_modified(poles, residues, constant)
-                # Initialize constant to constant_modified (dc value only)
-                constant = constant_modified
-                idx_column_Ct = 0
-                C_modified_response = C_modified_view[i][j]
-                # Update residues
-                for idx_residue, residue in enumerate(residues):
-                    if np.imag(residue) == 0.0:
-                        # Real residue
-                        residues[idx_residue] = C_modified_response[idx_column_Ct] * poles[idx_residue]
-                        constant += np.real(C_modified_response[idx_column_Ct])
-                        idx_column_Ct += 1
-                    else:
-                        # Complex-conjugate residue
-                        residues[idx_residue] = \
-                            (C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]) * \
-                                poles[idx_residue]
-                        constant += 2 * np.real(C_modified_response[idx_column_Ct])
-                        idx_column_Ct += 2
-                # Update constant
-                self.constant[idx_pole_group][idx_pole_group_member] = constant
+        if preserve_dc:
+            # Update residues and constant
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    idx_response = i * n_ports + j
+                    idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
+                    idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
+                    residues = self.residues[idx_pole_group][idx_pole_group_member]
+                    poles = self.poles[idx_pole_group]
+                    constant = self.constant[idx_pole_group][idx_pole_group_member]
+                    residues_modified, constant_modified = \
+                        self._get_residues_and_constant_modified(poles, residues, constant)
+                    # Initialize constant to constant_modified (dc value only)
+                    constant = constant_modified
+                    idx_column_Ct = 0
+                    C_modified_response = C_view[i][j]
+                    # Update residues
+                    for idx_residue, residue in enumerate(residues):
+                        if np.imag(residue) == 0.0:
+                            # Real residue
+                            residues[idx_residue] = C_modified_response[idx_column_Ct] * poles[idx_residue]
+                            constant += np.real(C_modified_response[idx_column_Ct])
+                            idx_column_Ct += 1
+                        else:
+                            # Complex-conjugate residue
+                            residues[idx_residue] = \
+                                (C_modified_response[idx_column_Ct] + 1j * C_modified_response[idx_column_Ct + 1]) * \
+                                    poles[idx_residue]
+                            constant += 2 * np.real(C_modified_response[idx_column_Ct])
+                            idx_column_Ct += 2
+                    # Update constant
+                    self.constant[idx_pole_group][idx_pole_group_member] = constant
+        else:
+            # Update residues
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    idx_response = i * n_ports + j
+                    idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
+                    idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
+                    residues = self.residues[idx_pole_group][idx_pole_group_member]
+                    idx_column_Ct = 0
+                    C_response = C_view[i][j]
+                    for idx_residue, residue in enumerate(residues):
+                        if np.imag(residue) == 0.0:
+                            # Real residue
+                            residues[idx_residue] = C_response[idx_column_Ct]
+                            idx_column_Ct += 1
+                        else:
+                            # Complex-conjugate residue
+                            residues[idx_residue] = \
+                                C_response[idx_column_Ct] + 1j * C_response[idx_column_Ct + 1]
+                            idx_column_Ct += 2
+
+            # Update constant
+            if have_D and perturb_constant:
+                for i in range(n_ports):
+                    for j in range(n_ports):
+                        idx_response = i * n_ports + j
+                        idx_pole_group = self.map_idx_response_to_idx_pole_group[idx_response]
+                        idx_pole_group_member = self.map_idx_response_to_idx_pole_group_member[idx_response]
+                        self.constant[idx_pole_group][idx_pole_group_member] = D[i, j]
 
     def write_npz(self, path: str) -> None:
         """
