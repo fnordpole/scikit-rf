@@ -239,8 +239,9 @@ class VectorFitting:
         return model_order
 
     def _check_and_enforce_data_passivity_at_dc(self,
-        responses,
+        preserve_dc,
         enforce_data_passivity_at_dc = True,
+        enforce_data_real_at_dc = True,
         method = 'svd',
         ):
         # Enforces the dc point in the data to be passive using one of two methods.
@@ -250,38 +251,58 @@ class VectorFitting:
         #
         # Method 'svd' (default) uses singular value decomposition based clippig.
 
-        # Check whether data passivity at dc is enabled
-        if not enforce_data_passivity_at_dc:
-            warnings.warn('Warning: Data passivity enforcement at DC is disabled!', UserWarning, stacklevel=2)
+        # Check whether data has dc
+        if not self.omega[0] == 0:
+            if preserve_dc:
+                raise RuntimeError('Error: Data needs to have a DC point when preserve_dc is used.')
+            else:
+                warnings.warn('Warning: Data has no DC point. Model will be inaccurate at DC', UserWarning, stacklevel=2)
+
             return
 
-        n_ports = int(np.sqrt(np.size(responses, axis = 0)))
+        n_ports = int(np.sqrt(np.size(self.responses, axis = 0)))
 
         # Get S_DC and take the real part of it. The DC point cannot have imaginary parts. Maybe we can
         # add a warning if there are substantial imaginary parts in the DC but for now I leave it like this.
-        S_DC = np.real(self.network.s[0])
+        S_DC_real = np.real(self.network.s[0])
+        S_DC_imag = np.imag(self.network.s[0])
 
-        # Update DC point to real-only in responses
+        # Warn if we have a large imaginary part at DC
+        dc_imag_threshold = 1e-12
         for i in range(n_ports):
             for j in range(n_ports):
-                idx_response = i * n_ports + j
-                responses[idx_response, 0] = S_DC[i, j]
+                if np.abs(S_DC_imag[i, j]) > dc_imag_threshold:
+                   warnings.warn(f'Warning: Data DC point has a large imaginary part {S_DC_imag[i, j]} in response '
+                                 f'({i}, {j})', UserWarning, stacklevel=2)
+
+        # Enforce data real only at DC
+        print('Enforcing real only data at DC')
+        if enforce_data_real_at_dc:
+            # Update DC point to real-only in responses
+            for i in range(n_ports):
+                for j in range(n_ports):
+                    idx_response = i * n_ports + j
+                    self.responses[idx_response, 0] = S_DC_real[i, j]
+        S_DC = S_DC_real
 
         # Check if passive
-        singular_values = np.linalg.svd(S_DC, compute_uv=False)
+        singular_values = np.linalg.svd(S_DC_real, compute_uv=False)
         max_singular_value = np.max(singular_values)
         is_passive = max_singular_value < 1
 
         # Return if passive
         if is_passive:
-            logger.info('Warning: DC is passive at DC')
+            print('Data is passive at DC')
+            return
+        else:
+            warnings.warn('Warning: Data is not passive at DC.', UserWarning, stacklevel=2)
+
+        # Check whether enforce data passivity at dc is enabled
+        if not enforce_data_passivity_at_dc:
+            warnings.warn('Warning: Data passivity enforcement at DC is disabled.', UserWarning, stacklevel=2)
             return
 
-        warnings.warn('Warning: Data is not passive at DC', UserWarning, stacklevel=2)
-
-
-
-        logger.info('Starting data passivity enforcement at DC')
+        print('Starting data passivity enforcement at DC')
 
         # Save for comparison post optimization
         S_DC_original = np.copy(S_DC)
@@ -340,13 +361,13 @@ class VectorFitting:
             warnings.warn('Warning: Data passivity enforcement at DC failed', UserWarning, stacklevel=2)
             return
 
-        logger.info('Data passivity enforcement at DC succeeded')
+        print('Data passivity enforcement at DC succeeded')
 
         # Update DC point in responses
         for i in range(n_ports):
             for j in range(n_ports):
                 idx_response = i * n_ports + j
-                responses[idx_response, 0] = S_DC[i, j]
+                self.responses[idx_response, 0] = S_DC[i, j]
 
     def _print_algorithm_info_messsage(self, preserve_dc, fit_constant, fit_proportional):
         # Warn if fit_constant is enabled while dc_preserving fit is also enabled
@@ -357,8 +378,8 @@ class VectorFitting:
         if preserve_dc:
             print(f'Algorithm info: preserve_dc={preserve_dc} fit_proportional={fit_proportional}')
         else:
-            print(f'Algorithm info: preserve_dc={preserve_dc} fit_constant={fit_constant}'
-                  'fit_proportional={fit_proportional}')
+            print(f'Algorithm info: preserve_dc={preserve_dc} fit_constant={fit_constant} '
+                  f'fit_proportional={fit_proportional}')
 
     def vector_fit(self,
                  # Initial poles
@@ -547,18 +568,18 @@ class VectorFitting:
         pole_sharing = pole_sharing.lower()
 
         # Get omega
-        omega = self._get_omega()
+        self.omega = self._get_omega_from_network()
 
         # Get responses
-        responses = self._get_responses(parameter_type)
-        n_responses = np.size(responses, axis=0)
+        self.responses = self._get_responses(parameter_type)
+        n_responses = np.size(self.responses, axis=0)
 
         # Check and enforce passivity at DC
-        self._check_and_enforce_data_passivity_at_dc(responses, enforce_data_passivity_at_dc)
+        self._check_and_enforce_data_passivity_at_dc(preserve_dc, enforce_data_passivity_at_dc)
 
         # Get weights
         if weights is None:
-            weights=self._get_weights(weighting, weighting_accuracy_db, responses)
+            self.weights=self._get_weights(weighting, weighting_accuracy_db)
 
         # Initialize pole sharing
         self._initialize_pole_sharing(pole_sharing, n_responses, pole_groups)
@@ -592,15 +613,15 @@ class VectorFitting:
 
             if poles_init is None:
                 # Get initial poles
-                poles = self._get_initial_poles(omega, n_poles_init[idx_pole_group], poles_init_type[idx_pole_group],
-                                                poles_init_spacing[idx_pole_group], responses[indices_responses])
+                poles = self._get_initial_poles(self.omega, n_poles_init[idx_pole_group], poles_init_type[idx_pole_group],
+                                                poles_init_spacing[idx_pole_group], self.responses[indices_responses])
             else:
                 # Set initial poles to user-provided poles
                 poles = poles_init[idx_pole_group]
 
             # Call _vector_fit
             poles, residues, constant, proportional = self._vector_fit(
-                poles, omega, responses[indices_responses], weights[indices_responses],
+                poles, self.omega, self.responses[indices_responses], self.weights[indices_responses],
                 fit_constant, fit_proportional, memory_saver, preserve_dc,
                 max_iterations, stagnation_threshold, abstol)
 
@@ -930,18 +951,18 @@ class VectorFitting:
         pole_sharing = pole_sharing.lower()
 
         # Get omega
-        omega = self._get_omega()
+        self.omega = self._get_omega_from_network()
 
         # Get responses
-        responses = self._get_responses(parameter_type)
-        n_responses = np.size(responses, axis=0)
+        self.responses = self._get_responses(parameter_type)
+        n_responses = np.size(self.responses, axis=0)
 
         # Check and enforce passivity at DC
-        self._check_and_enforce_data_passivity_at_dc(responses, enforce_data_passivity_at_dc)
+        self._check_and_enforce_data_passivity_at_dc(preserve_dc, enforce_data_passivity_at_dc)
 
         # Get weights
         if weights is None:
-            weights=self._get_weights(weighting, weighting_accuracy_db, responses)
+            self.weights=self._get_weights(weighting, weighting_accuracy_db)
 
         # Initialize pole sharing
         self._initialize_pole_sharing(pole_sharing, n_responses, pole_groups)
@@ -980,8 +1001,8 @@ class VectorFitting:
             if poles_init is None:
                 # Get initial poles
                 poles = self._get_initial_poles(
-                    omega, n_poles_init[idx_pole_group], poles_init_type[idx_pole_group],
-                    poles_init_spacing[idx_pole_group], responses[indices_responses])
+                    self.omega, n_poles_init[idx_pole_group], poles_init_type[idx_pole_group],
+                    poles_init_spacing[idx_pole_group], self.responses[indices_responses])
             else:
                 # Set initial poles to user-provided poles
                 poles = poles_init[idx_pole_group]
@@ -997,7 +1018,7 @@ class VectorFitting:
 
             # Call _auto_fit
             poles, residues, constant, proportional = self._auto_fit(
-                poles, omega, responses[indices_responses], weights[indices_responses],
+                poles, self.omega, self.responses[indices_responses], self.weights[indices_responses],
                 fit_constant, fit_proportional, preserve_dc, memory_saver,
                 n_iterations_pre, n_iterations, n_iterations_post,
                 error_stagnation_threshold, spurious_pole_threshold,
@@ -1234,8 +1255,7 @@ class VectorFitting:
         self.constant_modified = [None] * n_pole_groups
         self.proportional = [None] * n_pole_groups
 
-    @staticmethod
-    def _get_initial_poles(omega: list, n_poles: int, pole_type: str, pole_spacing: str, responses):
+    def _get_initial_poles(self, omega: list, n_poles: int, pole_type: str, pole_spacing: str, responses):
         # Create initial poles and space them across the frequencies
         #
         # According to Gustavsen they thould generally
@@ -1333,7 +1353,7 @@ class VectorFitting:
         self.history_rank_deficiency_A_dense = []
         self.max_singular_value_A_dense = 1
 
-    def _get_omega(self):
+    def _get_omega_from_network(self):
         # Calculates omega
         omega = 2.0 * np.pi * np.array(self.network.f)
         return omega
@@ -1522,19 +1542,19 @@ class VectorFitting:
 
         return n_ports
 
-    def _get_weights(self, weighting, weighting_accuracy_db, responses):
+    def _get_weights(self, weighting, weighting_accuracy_db):
         # Calculates the weights w(s)
 
         if weighting.lower() == 'uniform':
-            weights=np.ones(np.shape(responses))
+            weights=np.ones(np.shape(self.responses))
 
         elif weighting.lower() == 'inverse_magnitude':
-            weights = 1/np.clip(np.abs(responses), np.pow(10, weighting_accuracy_db/20), np.inf)
+            weights = 1/np.clip(np.abs(self.responses), np.pow(10, weighting_accuracy_db/20), np.inf)
 
         else:
             warnings.warn('Invalid choice of weighting. Proceeding with uniform weighting'
                            ,UserWarning, stacklevel=2)
-            weights=np.ones(np.shape(responses))
+            weights=np.ones(np.shape(self.responses))
 
         return weights
 
@@ -1542,7 +1562,7 @@ class VectorFitting:
         # Get responses in vector fitting format
 
         # Get network responses
-        nw_responses=self._get_nw_responses(parameter_type)
+        nw_responses=self._get_responses_from_network(parameter_type)
 
         # Stack frequency responses as a single vector
         # stacking order (row-major):
@@ -1555,7 +1575,7 @@ class VectorFitting:
 
         return responses
 
-    def _get_nw_responses(self, parameter_type: str = 's'):
+    def _get_responses_from_network(self, parameter_type: str = 's'):
         # Get network responses
 
         # Select network representation type
@@ -2535,7 +2555,7 @@ class VectorFitting:
             list_j = j
 
         # Get network responses
-        nw_responses = self._get_nw_responses(parameter_type)
+        nw_responses = self._get_responses_from_network(parameter_type)
 
         error_mean_squared = 0
         for i in list_i:
@@ -2594,7 +2614,7 @@ class VectorFitting:
             list_j = j
 
         # Get network responses
-        nw_responses = self._get_nw_responses(parameter_type)
+        nw_responses = self._get_responses_from_network(parameter_type)
 
         error_mean_squared = 0
         for i in list_i:
@@ -2628,7 +2648,7 @@ class VectorFitting:
         """
 
         # Get network responses
-        nw_responses = self._get_nw_responses(parameter_type)
+        nw_responses = self._get_responses_from_network(parameter_type)
 
         n_responses=np.size(nw_responses, axis=1)
         error_mean_squared = np.zeros((n_responses, n_responses))
@@ -2663,7 +2683,7 @@ class VectorFitting:
         """
 
         # Get network responses
-        nw_responses = self._get_nw_responses(parameter_type)
+        nw_responses = self._get_responses_from_network(parameter_type)
 
         n_responses=np.size(nw_responses, axis=1)
         error_mean_squared = np.zeros((n_responses, n_responses))
@@ -2702,7 +2722,7 @@ class VectorFitting:
         """
 
         # Get network responses
-        nw_responses = self._get_nw_responses(parameter_type)
+        nw_responses = self._get_responses_from_network(parameter_type)
 
         n_responses=np.size(nw_responses, axis=1)
         n_freqs=np.size(nw_responses, axis=0)
@@ -2749,7 +2769,7 @@ class VectorFitting:
         """
 
         # Get network responses
-        nw_responses = self._get_nw_responses(parameter_type)
+        nw_responses = self._get_responses_from_network(parameter_type)
 
         n_responses=np.size(nw_responses, axis=1)
         n_freqs=np.size(nw_responses, axis=0)
@@ -2768,6 +2788,40 @@ class VectorFitting:
                     error[i, j, :] = np.abs(nw_ij - fit_ij) / np.abs(nw_ij)
 
         return error
+
+
+    def _get_indices_poles(self, poles):
+        # Returns indices of real and complex conjugate pole pairs in poles
+
+        # Get indices of real poles
+        idx_poles_real = np.nonzero(poles.imag == 0)[0]
+
+        # Get indices of complex poles
+        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
+
+        return idx_poles_real, idx_poles_complex
+
+    def _get_residues_and_constant_modified(self, poles, residues, constant):
+        # Returns the residues_modified and constant_modified matching to the modified
+        # vector fitting using basis functions r*s/(s-p)
+
+        # Get indices of poles
+        idx_poles_real, idx_poles_complex = self._get_indices_poles(poles)
+
+        # Initialize empty
+        residues_modified = np.empty(np.shape(residues), dtype=complex)
+        constant_modified = np.empty(np.shape(constant), dtype=complex)
+
+        # Residues in modified vf form
+        residues_modified[:, idx_poles_real] = residues[:, idx_poles_real] / np.real(poles[idx_poles_real])
+        residues_modified[:, idx_poles_complex] =  residues[:, idx_poles_complex] / poles[idx_poles_complex]
+
+        # Constant in standard partial fraction form
+        constant_modified = constant - \
+            np.sum(np.real(residues_modified[:, idx_poles_real]), axis = 1) - \
+            2 * np.sum(np.real(residues_modified[:, idx_poles_complex]), axis = 1)
+
+        return residues_modified, constant_modified
 
     def _get_state_space_ABCDE(self, create_views = False,
                    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -2932,39 +2986,6 @@ class VectorFitting:
             return A, B, C, D, E, A_view, B_view, C_view
         else:
             return A, B, C, D, E
-
-    def _get_indices_poles(self, poles):
-        # Returns indices of real and complex conjugate pole pairs in poles
-
-        # Get indices of real poles
-        idx_poles_real = np.nonzero(poles.imag == 0)[0]
-
-        # Get indices of complex poles
-        idx_poles_complex = np.nonzero(poles.imag != 0)[0]
-
-        return idx_poles_real, idx_poles_complex
-
-    def _get_residues_and_constant_modified(self, poles, residues, constant):
-        # Returns the residues_modified and constant_modified matching to the modified
-        # vector fitting using basis functions r*s/(s-p)
-
-        # Get indices of poles
-        idx_poles_real, idx_poles_complex = self._get_indices_poles(poles)
-
-        # Initialize empty
-        residues_modified = np.empty(np.shape(residues), dtype=complex)
-        constant_modified = np.empty(np.shape(constant), dtype=complex)
-
-        # Residues in modified vf form
-        residues_modified[:, idx_poles_real] = residues[:, idx_poles_real] / np.real(poles[idx_poles_real])
-        residues_modified[:, idx_poles_complex] =  residues[:, idx_poles_complex] / poles[idx_poles_complex]
-
-        # Constant in standard partial fraction form
-        constant_modified = constant - \
-            np.sum(np.real(residues_modified[:, idx_poles_real]), axis = 1) - \
-            2 * np.sum(np.real(residues_modified[:, idx_poles_complex]), axis = 1)
-
-        return residues_modified, constant_modified
 
     def _get_state_space_FABCDE(self, s, create_views = False, create_modified = False):
         # Creates the state space matrix F=(sI-A)^-1 B and C, D, E
@@ -4800,7 +4821,7 @@ class VectorFitting:
 
             if self.network is not None and not plot_error:
                 # Plot the original network response at each sample frequency (scatter plot)
-                responses = self._get_nw_responses(parameter)
+                responses = self._get_responses_from_network(parameter)
 
                 i_samples = 0
                 for i in list_i:
