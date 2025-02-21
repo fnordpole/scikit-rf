@@ -1523,7 +1523,7 @@ class VectorFitting:
         if self.network:
             print(f'Total absolute error (RMS) = {self.get_total_abs_error():.4e}')
             print(f'Total relative error (RMS) = {self.get_total_rel_error():.4e}')
-            if verbose:
+            if verbose and n_ports <= 4:
                 self.plot_model_vs_data()
 
         if self.is_symmetric():
