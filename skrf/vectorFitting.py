@@ -3029,11 +3029,9 @@ class VectorFitting:
 
         # These views enable easy accesss to the submatrices
         F_view = [x[:] for x in [[None] * n_ports] * n_ports]
-        F_modified_view = [x[:] for x in [[None] * n_ports] * n_ports]
         A_view = [x[:] for x in [[None] * n_ports] * n_ports]
         B_view = [x[:] for x in [[None] * n_ports] * n_ports]
         C_view = [x[:] for x in [[None] * n_ports] * n_ports]
-        C_modified_view = [x[:] for x in [[None] * n_ports] * n_ports]
         C_col_idx_begin = [x[:] for x in [[None] * n_ports] * n_ports]
         C_col_idx_end = [x[:] for x in [[None] * n_ports] * n_ports]
 
@@ -3061,13 +3059,10 @@ class VectorFitting:
         # Create empty output matrices
         n_A = int(np.sum(n_subcolumns_in_columns_of_C))
         F = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
-        F_modified = np.zeros(shape=(n_freqs, n_A, n_ports), dtype = complex)
         A = np.zeros(shape=(n_A, n_A))
         B = np.zeros(shape=(n_A, n_ports))
         C = np.zeros(shape=(n_ports, n_A))
-        C_modified = np.zeros(shape=(n_ports, n_A))
         D = np.zeros(shape=(n_ports, n_ports))
-        D_modified = np.zeros(shape=(n_ports, n_ports))
         E = np.zeros(shape=(n_ports, n_ports))
 
         # Index on diagonal of A
@@ -3097,25 +3092,29 @@ class VectorFitting:
                 constant = self.constant[idx_pole_group]
                 proportional = self.proportional[idx_pole_group]
                 if create_modified:
-                    residues_modified, constant_modified = \
+                    residues, constant = \
                         self._get_residues_and_constant_modified(poles, residues, constant)
 
                 # Create contribution of this pole group into A and B
                 for pole in poles:
                     if np.imag(pole) == 0.0:
                         # Real pole
-                        F[:, idx_diag_A, j] = 1 / (s - np.real(pole))
-                        F_modified[:, idx_diag_A, j] = s / (s - np.real(pole))
+                        if create_modified:
+                            F[:, idx_diag_A, j] = s / (s - np.real(pole))
+                        else:
+                            F[:, idx_diag_A, j] = 1 / (s - np.real(pole))
                         A[idx_diag_A, idx_diag_A] = np.real(pole)
                         B[idx_diag_A, j] = 1
                         idx_diag_A += 1
                     else:
                         # Complex-conjugate pole
                         denom = (s - np.real(pole))**2 + np.imag(pole)**2
-                        F[:, idx_diag_A, j] = 2 * (s - np.real(pole)) / denom
-                        F[:, idx_diag_A + 1, j] = -2 * np.imag(pole) / denom
-                        F_modified[:, idx_diag_A, j] = s * 2 * (s - np.real(pole)) / denom
-                        F_modified[:, idx_diag_A + 1, j] = s * -2 * np.imag(pole) / denom
+                        if create_modified:
+                            F[:, idx_diag_A, j] = s * 2 * (s - np.real(pole)) / denom
+                            F[:, idx_diag_A + 1, j] = s * -2 * np.imag(pole) / denom
+                        else:
+                            F[:, idx_diag_A, j] = 2 * (s - np.real(pole)) / denom
+                            F[:, idx_diag_A + 1, j] = -2 * np.imag(pole) / denom
                         A[idx_diag_A, idx_diag_A] = np.real(pole)
                         A[idx_diag_A, idx_diag_A + 1] = np.imag(pole)
                         A[idx_diag_A + 1, idx_diag_A] = -1 * np.imag(pole)
@@ -3133,16 +3132,12 @@ class VectorFitting:
                     idx_col_C = offset_col_C
                     for idx_residue in range(len(residues[idx_pole_group_member])):
                         residue = residues[idx_pole_group_member][idx_residue]
-                        residue_modified = residues_modified[idx_pole_group_member][idx_residue]
                         if np.imag(residue) == 0.0:
                             C[i, idx_col_C] = np.real(residue)
-                            C_modified[i, idx_col_C] = np.real(residue_modified)
                             idx_col_C += 1
                         else:
                             C[i, idx_col_C] = np.real(residue)
                             C[i, idx_col_C + 1] = np.imag(residue)
-                            C_modified[i, idx_col_C] = np.real(residue_modified)
-                            C_modified[i, idx_col_C + 1] = np.imag(residue_modified)
                             idx_col_C += 2
 
                     if create_views:
@@ -3155,14 +3150,8 @@ class VectorFitting:
                         # Create view on C
                         C_view[i][j] = C[i, offset_col_C:idx_col_C]
 
-                        # Create view on C_modified
-                        C_modified_view[i][j] = C_modified[i, offset_col_C:idx_col_C]
-
                         # Create view on F
                         F_view[i][j] = F[:, offset_col_C:idx_col_C, j]
-
-                        # Create view on F_modified
-                        F_modified_view[i][j] = F_modified[:, offset_col_C:idx_col_C, j]
 
                         # Create nC
                         nC[i, j] = idx_col_C - offset_col_C
@@ -3173,22 +3162,15 @@ class VectorFitting:
 
                     # Create D and E
                     D[i, j] = constant[idx_pole_group_member]
-                    D_modified[i, j] = constant_modified[idx_pole_group_member]
                     E[i, j] = proportional[idx_pole_group_member]
 
                 # Increment offset for next pole group
                 offset_col_C = idx_col_C
 
-        if create_views and create_modified:
-            return F, F_modified, A, B, C, C_modified, D, D_modified, E, \
-                F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+        if create_views:
+            return F, A, B, C, D, E, \
+                F_view, A_view, B_view, C_view, \
                 nC, C_col_idx_begin, C_col_idx_end
-
-        elif create_views and not create_modified:
-            return F, A, B, C, D, E, F_view, A_view, B_view, C_view, nC, C_col_idx_begin, C_col_idx_end
-
-        elif not create_views and create_modified:
-            return F, F_modified, A, B, C, C_modified, D, D_modified, E
 
         else:
             return F, A, B, C, D, E
@@ -3786,6 +3768,7 @@ class VectorFitting:
 
     def _passivity_enforce(self,
         n_samples,
+        n_samples_per_band,
         maximum_frequency_of_interest,
         parameter_type,
         max_iterations,
@@ -3847,13 +3830,9 @@ class VectorFitting:
         # Calculate omega
         maximum_omega_of_interest = 2 * np.pi * maximum_frequency_of_interest
 
-        # The frequency band for the passivity evaluation is from dc to 20% above the highest relevant frequency
-        highest_relevant_omega = max(maximum_omega_of_interest, omega_highest_crossing)
-
-        # Calculate omega_eval and s_eval. Unfortunately the paper does not specify what "dense" means and what
-        # would happen if it's not dense enough.
-        omega_eval = 2 * np.pi * np.linspace(0, 1.2 * highest_relevant_omega, n_samples)
-        s_eval = 1j * omega_eval
+        # Get s_eval
+        omega_eval, s_eval = self._passivity_get_eval_frequencies(
+            maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type)
 
         # Set tolerance parameter according to paper. Unfortunately it does not provide any information on
         # how this parameter influences the algorithm.
@@ -3864,7 +3843,8 @@ class VectorFitting:
         delta = 1-1e-3
 
         # Get state space model
-        F, C, D, E, F_view, C_view = self._get_state_space_FCDE(s_eval, create_views = True)
+        F, A, B, C, D, E, F_view, A_view, B_view, C_view, nC, C_col_idx_begin, C_col_idx_end = \
+            self._get_state_space_FABCDE(s_eval, create_modified = False, create_views = True)
 
         # Flag that's True if we have non zero D
         have_D = len(np.nonzero(D)[0]) != 0
@@ -3890,13 +3870,10 @@ class VectorFitting:
                 # Get F0
                 F0 = F_view[i][j]
 
-                # Size n_F0 of square matrix A0
-                n_F0 = np.size(F0, axis = 1)
-
                 # Build matrix F1 that contains F0 and optionally a row for D if we have it
                 if have_D:
-                    F1 = np.empty((n_samples, n_F0 + 1), dtype=complex)
-                    D_norm[i][j] = np.linalg.norm(F0) / (n_samples * n_F0)
+                    F1 = np.empty((np.size(F0, axis = 0), np.size(F0, axis = 1) + 1), dtype=complex)
+                    D_norm[i][j] = np.linalg.norm(F0) / np.size(F0)
                     F1[:, :-1] = F0
                     F1[:, -1] = 1 * D_norm[i][j][None, None]
                 else:
@@ -4049,11 +4026,16 @@ class VectorFitting:
         omega_eval, s_eval = self._passivity_get_eval_frequencies(
             maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type)
 
-        # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
-        F, F_modified, A, B, C, C_modified, D, D_modified, E, \
-            F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+        # Get state space model
+        F_modified, A_modified, B_modified, C_modified, D_modified, E_modified, \
+            F_modified_view, A_modified_view, B_modified_view, C_modified_view, \
             nC, C_col_idx_begin, C_col_idx_end = \
             self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
+
+        F, A, B, C, D, E, \
+            F_view, A_view, B_view, C_view, \
+            nC, C_col_idx_begin, C_col_idx_end = \
+            self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = False)
 
         # Singular value decomposition
         u, sigma, vh = np.linalg.svd(D, full_matrices=False)
@@ -4074,7 +4056,7 @@ class VectorFitting:
 
         # Continue if model is non-passive
         if sigma_max > 1:
-            print(f'Starting asymptotic passivity enforcement.')
+            print('Starting asymptotic passivity enforcement.')
 
             # Set delta
             delta = 1
@@ -4197,7 +4179,7 @@ class VectorFitting:
 
             print(f'C_modified={C_modified}')
             # Update model
-            self._passivity_update_model(C_modified_view)
+            self._passivity_update_model(C_modified_view, preserve_dc = True)
 
             print('Finished asymptotic passivity enforcement.')
 
@@ -4214,11 +4196,16 @@ class VectorFitting:
                 omega_eval, s_eval = self._passivity_get_eval_frequencies(
                     maximum_omega_of_interest, n_samples, n_samples_per_band, parameter_type)
 
-                # Get state space model. The views are lits of lists mapping into the respective sub-matrices.
-                F, F_modified, A, B, C, C_modified, D, D_modified, E, \
-                    F_view, F_modified_view, A_view, B_view, C_view, C_modified_view, \
+                # Get state space model
+                F_modified, A_modified, B_modified, C_modified, D_modified, E_modified, \
+                    F_modified_view, A_modified_view, B_modified_view, C_modified_view, \
                     nC, C_col_idx_begin, C_col_idx_end = \
                     self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = True)
+
+                F, A, B, C, D, E, \
+                    F_view, A_view, B_view, C_view, \
+                    nC, C_col_idx_begin, C_col_idx_end = \
+                    self._get_state_space_FABCDE(s_eval, create_views = True, create_modified = False)
 
                 logger.info("Updated model")
 
@@ -4438,7 +4425,7 @@ class VectorFitting:
         return omega_eval, s_eval
 
     def _passivity_update_model(self, C_view,
-        preserve_dc = True,
+        preserve_dc,
         have_D = False,
         perturb_constant = False,
         D = None,
