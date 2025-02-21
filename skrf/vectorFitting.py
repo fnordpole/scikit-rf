@@ -11,6 +11,7 @@ from scipy import integrate
 from scipy.signal import find_peaks
 from scipy.linalg import issymmetric
 from scipy.optimize import minimize
+import matplotlib.pyplot as mplt
 
 from .util import Axes, axes_kwarg
 
@@ -1522,6 +1523,8 @@ class VectorFitting:
         if self.network:
             print(f'Total absolute error (RMS) = {self.get_total_abs_error():.4e}')
             print(f'Total relative error (RMS) = {self.get_total_rel_error():.4e}')
+            if verbose:
+                self.plot_model_vs_data()
 
         if self.is_symmetric():
             print('Model is symmetric = True')
@@ -4719,6 +4722,18 @@ class VectorFitting:
                 model_response += residues[i] / (s - pole) + np.conjugate(residues[i]) / (s - np.conjugate(pole))
 
         return model_response
+
+    def plot_model_vs_data(self):
+        # Plot fit vs original data
+        freqs = np.linspace(np.min(self.network.f), np.max(self.network.f), 201)
+        n_ports=self._get_n_ports()
+        fig, ax = mplt.subplots(n_ports, n_ports)
+        fig.set_size_inches(12, 8)
+        for i in range(n_ports):
+            for j in range(n_ports):
+                self.plot_s_db(i, j, freqs=freqs, ax=ax[i][j])
+        fig.tight_layout()
+        mplt.show()
 
     @axes_kwarg
     def plot(self, component: str, i: int = -1, j: int = -1, freqs: Any = None,
