@@ -2011,6 +2011,9 @@ class VectorFitting:
             b_dense = np.empty(n_responses * n_rows_R22)
             b_dense = RHS.reshape((-1, 1))
 
+            # Dummy
+            d_tilde_norm = 1
+
         else:
             A_dense = np.empty((n_responses * n_rows_R22 + 1, n_C_tilde))
             A_dense[:-1, :] = R22.reshape((n_responses * n_rows_R22, n_C_tilde))
@@ -4439,6 +4442,21 @@ class VectorFitting:
         n_ports = self._get_n_ports()
 
         if preserve_dc:
+            # Get number of pole groups
+            n_pole_groups = len(self.poles)
+
+            # Create empty lists
+            residues_modified_all = [None] * n_pole_groups
+            constant_modified_all = [None] * n_pole_groups
+
+            # Create residues_modified and constant_modified for all pole groups
+            for idx_pole_group in range(n_pole_groups):
+                residues_modified_all[idx_pole_group], constant_modified_all[idx_pole_group] = \
+                    self._get_residues_and_constant_modified(
+                        self.poles[idx_pole_group],
+                        self.residues[idx_pole_group],
+                        self.constant[idx_pole_group])
+
             # Update residues and constant
             for i in range(n_ports):
                 for j in range(n_ports):
@@ -4448,8 +4466,8 @@ class VectorFitting:
                     residues = self.residues[idx_pole_group][idx_pole_group_member]
                     poles = self.poles[idx_pole_group]
                     constant = self.constant[idx_pole_group][idx_pole_group_member]
-                    residues_modified, constant_modified = \
-                        self._get_residues_and_constant_modified(poles, residues, constant)
+                    residues_modified = residues_modified_all[idx_pole_group][idx_pole_group_member]
+                    constant_modified = constant_modified_all[idx_pole_group][idx_pole_group_member]
                     # Initialize constant to constant_modified (dc value only)
                     constant = constant_modified
                     idx_column_Ct = 0
