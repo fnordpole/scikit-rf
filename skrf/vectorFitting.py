@@ -243,6 +243,7 @@ class VectorFitting:
         preserve_dc,
         enforce_data_passivity_at_dc = True,
         enforce_data_real_at_dc = True,
+        extrapolate_to_dc = True,
         method = 'svd',
         ):
         # Enforces the dc point in the data to be passive using one of two methods.
@@ -252,38 +253,64 @@ class VectorFitting:
         #
         # Method 'svd' (default) uses singular value decomposition based clippig.
 
-        # Check whether data has dc
-        if not self.omega[0] == 0:
-            if preserve_dc:
-                raise RuntimeError('Error: Data needs to have a DC point when preserve_dc is used.')
-            else:
-                warnings.warn('Warning: Data has no DC point. Model will be inaccurate at DC', UserWarning, stacklevel=2)
-
-            return
-
         n_ports = int(np.sqrt(np.size(self.responses, axis = 0)))
 
-        # Get S_DC and take the real part of it. The DC point cannot have imaginary parts. Maybe we can
-        # add a warning if there are substantial imaginary parts in the DC but for now I leave it like this.
-        S_DC_real = np.real(self.network.s[0])
-        S_DC_imag = np.imag(self.network.s[0])
+        # Check whether data has dc
+        if not self.omega[0] == 0:
+            if extrapolate_to_dc:
+                warnings.warn('Warning: Data has no DC point. Extrapolating to DC. Model will be inaccurate at DC',
+                              UserWarning, stacklevel=2)
+                # Interpolating real and imaginary parts separately
+                S1 = self.network.s[0]
+                S2 = self.network.s[1]
+                omega1 = self.omega[0]
+                omega2 = self.omega[1]
+                S_DC_real = S1.real + (0 - omega1) * (S2.real - S1.real) / (omega2 - omega1)
 
-        # Warn if we have a large imaginary part at DC
-        dc_imag_threshold = 1e-12
-        for i in range(n_ports):
-            for j in range(n_ports):
-                if np.abs(S_DC_imag[i, j]) > dc_imag_threshold:
-                   warnings.warn(f'Warning: Data DC point has a large imaginary part {S_DC_imag[i, j]} in response '
-                                 f'({i}, {j})', UserWarning, stacklevel=2)
+                # Update responses and omega with DC point
+                responses_new = np.empty(
+                    (np.size(self.responses, axis = 0), np.size(self.responses, axis = 1) + 1), dtype=complex)
 
-        # Enforce data real only at DC
-        print('Enforcing real only data at DC')
-        if enforce_data_real_at_dc:
-            # Update DC point to real-only in responses
+                for i in range(n_ports):
+                    for j in range(n_ports):
+                        idx_response = i * n_ports + j
+
+                        responses_new[idx_response, 0] = S_DC_real[i, j]
+                        responses_new[idx_response, 1:] = self.responses[idx_response, :]
+
+                self.responses = responses_new
+                self.omega = np.insert(self.omega, 0, 0)
+            else:
+                if preserve_dc:
+                    raise RuntimeError('Error: Data has no DC point and extrapolation to DC is disabled but'
+                                       'a DC point is required when preserve_dc is used.')
+
+                warnings.warn('Warning: Data has no DC point. Model will be inaccurate at DC',
+                              UserWarning, stacklevel=2)
+                return
+        else:
+            # Get S_DC from network
+            S_DC_real = np.real(self.network.s[0])
+            S_DC_imag = np.imag(self.network.s[0])
+
+            # Warn if we have a large imaginary part at DC
+            dc_imag_threshold = 1e-12
             for i in range(n_ports):
                 for j in range(n_ports):
-                    idx_response = i * n_ports + j
-                    self.responses[idx_response, 0] = S_DC_real[i, j]
+                    if np.abs(S_DC_imag[i, j]) > dc_imag_threshold:
+                       warnings.warn(f'Warning: Data DC point has a large imaginary part {S_DC_imag[i, j]} in response '
+                                     f'({i}, {j})', UserWarning, stacklevel=2)
+
+            # Enforce data real only at DC
+            print('Enforcing real only data at DC')
+            if enforce_data_real_at_dc:
+                # Update DC point to real-only in responses
+                for i in range(n_ports):
+                    for j in range(n_ports):
+                        idx_response = i * n_ports + j
+                        self.responses[idx_response, 0] = S_DC_real[i, j]
+
+        # Get new S_DC
         S_DC = S_DC_real
 
         # Check if passive
