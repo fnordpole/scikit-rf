@@ -4769,8 +4769,8 @@ class VectorFitting:
         return model_response
 
     def plot_model_vs_data(self):
-        # Plot fit vs original data
-        freqs = np.linspace(np.min(self.network.f), np.max(self.network.f), 201)
+        # Plot fit vs original data only in the data frequency range
+        freqs = np.linspace(np.min(self.network.f), np.max(self.network.f), 1001)
         n_ports=self._get_n_ports()
         fig, ax = mplt.subplots(n_ports, n_ports)
         fig.set_size_inches(12, 8)
@@ -4779,6 +4779,29 @@ class VectorFitting:
                 self.plot_s_db(i, j, freqs=freqs, ax=ax[i][j])
         fig.tight_layout()
         mplt.show()
+
+        # Plot fit vs original data up to 10 times the maximum data frequency
+        freqs = np.linspace(np.min(self.network.f), 10*np.max(self.network.f), 1001)
+        n_ports=self._get_n_ports()
+        fig, ax = mplt.subplots(n_ports, n_ports)
+        fig.set_size_inches(12, 8)
+        for i in range(n_ports):
+            for j in range(n_ports):
+                self.plot_s_db(i, j, freqs=freqs, ax=ax[i][j])
+        fig.tight_layout()
+        mplt.show()
+
+        # Plot fit vs original data up to 100 times the maximum data frequency
+        freqs = np.linspace(np.min(self.network.f), 100*np.max(self.network.f), 1001)
+        n_ports=self._get_n_ports()
+        fig, ax = mplt.subplots(n_ports, n_ports)
+        fig.set_size_inches(12, 8)
+        for i in range(n_ports):
+            for j in range(n_ports):
+                self.plot_s_db(i, j, freqs=freqs, ax=ax[i][j])
+        fig.tight_layout()
+        mplt.show()
+
 
     @axes_kwarg
     def plot(self, component: str, i: int = -1, j: int = -1, freqs: Any = None,
