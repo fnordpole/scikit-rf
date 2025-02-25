@@ -4493,7 +4493,6 @@ class VectorFitting:
                     residues = self.residues[idx_pole_group][idx_pole_group_member]
                     poles = self.poles[idx_pole_group]
                     constant = self.constant[idx_pole_group][idx_pole_group_member]
-                    residues_modified = residues_modified_all[idx_pole_group][idx_pole_group_member]
                     constant_modified = constant_modified_all[idx_pole_group][idx_pole_group_member]
                     # Initialize constant to constant_modified (dc value only)
                     constant = constant_modified
